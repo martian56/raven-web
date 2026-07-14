@@ -1,0 +1,1716 @@
+// raven-web: safe browser artifacts for Raven.
+
+import std/json { JsonValue, stringify }
+import std/fs { create_dir_all, dirname, join, write }
+import std/error { Error }
+
+struct Attribute {
+    name: String,
+    value: String,
+}
+
+struct Node {
+    tag: String,
+    value: String,
+    attrs: List<Attribute>,
+    kids: List<Node>,
+}
+
+fun _node(tag: String) -> Node {
+    let attrs: List<Attribute> = []
+    let kids: List<Node> = []
+    return Node { tag, value: "", attrs, kids }
+}
+fun _text_node(value: String) -> Node {
+    let attrs: List<Attribute> = []
+    let kids: List<Node> = []
+    return Node { tag: "", value, attrs, kids }
+}
+
+fun _quote() -> String {
+    return stringify(JsonValue.Str("")).substring(0, 1)
+}
+
+fun _escape_html(value: String) -> String {
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
+        _quote(),
+        "&quot;",
+    ).replace("'", "&#39;")
+}
+
+fun _ascii_letter(b: Int) -> Bool {
+    return (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+
+fun _name_char(b: Int) -> Bool {
+    return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 45
+}
+
+fun _valid_tag(tag: String) -> Bool {
+    if tag.length() == 0 || !_ascii_letter(tag.byte_at(0)) {
+        return false
+    }
+    let i = 1
+    while i < tag.length() {
+        if !_name_char(tag.byte_at(i)) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+fun _valid_attr_name(name: String) -> Bool {
+    if name.length() == 0 || !_ascii_letter(name.byte_at(0)) {
+        return false
+    }
+    let i = 1
+    while i < name.length() {
+        let b = name.byte_at(i)
+        if !_name_char(b) && b != 58 {
+            return false
+        }
+        i += 1
+    }
+    let lower = name.to_lower()
+    if lower.starts_with("on") || lower == "style" {
+        return false
+    }
+    return true
+}
+
+fun _void_tag(tag: String) -> Bool {
+    return tag == "area" || tag == "base" || tag == "br" || tag == "col" || tag == "embed" || tag == "hr" || tag == "img" || tag == "input" || tag == "link" || tag == "meta" || tag == "param" || tag == "source" || tag == "track" || tag == "wbr"
+}
+
+// A DOM event an element can react to. The name maps to the delegated event the
+// generated runtime listens for. focus/blur and mouseenter/leave map to their
+// bubbling equivalents so a single document-level listener can dispatch them.
+enum Event {
+    Click,
+    Input,
+    Change,
+    Submit,
+    KeyDown,
+    KeyUp,
+    Focus,
+    Blur,
+    MouseEnter,
+    MouseLeave,
+    Scroll,
+}
+
+impl Event {
+    fun name(self) -> String {
+        return match self {
+            Click -> "click",
+            Input -> "input",
+            Change -> "change",
+            Submit -> "submit",
+            KeyDown -> "keydown",
+            KeyUp -> "keyup",
+            Focus -> "focusin",
+            Blur -> "focusout",
+            MouseEnter -> "mouseover",
+            MouseLeave -> "mouseout",
+            Scroll -> "scroll",
+        }
+    }
+}
+
+impl Node {
+    // Infallible: an invalid tag yields a fragment (its children still render,
+    // the element wrapper is dropped), matching how attr and href silently
+    // reject unsafe input. Use try_new to detect an invalid tag.
+    fun new(tag: String) -> Node {
+        if !_valid_tag(tag) {
+            return _node("")
+        }
+        return _node(tag.to_lower())
+    }
+
+    fun try_new(tag: String) -> Result<Node, String> {
+        if !_valid_tag(tag) {
+            return Err("invalid HTML tag")
+        }
+        return Ok(_node(tag.to_lower()))
+    }
+
+    fun text(value: String) -> Node {
+        return _text_node(value)
+    }
+
+    fun fragment() -> Node {
+        return _node("")
+    }
+
+    fun div() -> Node {
+        return _node("div")
+    }
+
+    fun section() -> Node {
+        return _node("section")
+    }
+
+    fun article() -> Node {
+        return _node("article")
+    }
+
+    fun header() -> Node {
+        return _node("header")
+    }
+
+    fun footer() -> Node {
+        return _node("footer")
+    }
+
+    fun nav() -> Node {
+        return _node("nav")
+    }
+
+    fun main_node() -> Node {
+        return _node("main")
+    }
+
+    fun aside() -> Node {
+        return _node("aside")
+    }
+
+    fun form() -> Node {
+        return _node("form")
+    }
+
+    fun label() -> Node {
+        return _node("label")
+    }
+
+    fun table() -> Node {
+        return _node("table")
+    }
+
+    fun thead() -> Node {
+        return _node("thead")
+    }
+
+    fun tbody() -> Node {
+        return _node("tbody")
+    }
+
+    fun tr() -> Node {
+        return _node("tr")
+    }
+
+    fun th() -> Node {
+        return _node("th")
+    }
+
+    fun td() -> Node {
+        return _node("td")
+    }
+
+    fun dl() -> Node {
+        return _node("dl")
+    }
+
+    fun dt() -> Node {
+        return _node("dt")
+    }
+
+    fun dd() -> Node {
+        return _node("dd")
+    }
+
+    fun strong() -> Node {
+        return _node("strong")
+    }
+
+    fun small() -> Node {
+        return _node("small")
+    }
+
+    fun time() -> Node {
+        return _node("time")
+    }
+
+    fun code() -> Node {
+        return _node("code")
+    }
+
+    fun h1() -> Node {
+        return _node("h1")
+    }
+
+    fun h2() -> Node {
+        return _node("h2")
+    }
+
+    fun p() -> Node {
+        return _node("p")
+    }
+
+    fun span() -> Node {
+        return _node("span")
+    }
+
+    fun ul() -> Node {
+        return _node("ul")
+    }
+
+    fun li() -> Node {
+        return _node("li")
+    }
+
+    fun button(label: String) -> Node {
+        return _node("button").attr("type", "button").child_text(label)
+    }
+
+    fun submit_button(label: String) -> Node {
+        return _node("button").attr("type", "submit").child_text(label)
+    }
+
+    fun input_field(placeholder: String) -> Node {
+        return _node("input").attr("type", "text").attr("placeholder", placeholder)
+    }
+
+    fun textarea(placeholder: String) -> Node {
+        return _node("textarea").attr("placeholder", placeholder)
+    }
+
+    fun checkbox() -> Node {
+        return _node("input").attr("type", "checkbox")
+    }
+
+    fun select() -> Node {
+        return _node("select")
+    }
+
+    fun option(label: String, value: String) -> Node {
+        return _node("option").attr("value", value).child_text(label)
+    }
+
+    fun link(label: String, url: String) -> Node {
+        return _node("a").href(url).child_text(label)
+    }
+
+    fun image(url: String, alt: String) -> Node {
+        return _node("img").src(url).attr("alt", alt)
+    }
+
+    fun figure() -> Node {
+        return _node("figure")
+    }
+
+    fun figcaption() -> Node {
+        return _node("figcaption")
+    }
+
+    fun blockquote() -> Node {
+        return _node("blockquote")
+    }
+
+    fun details() -> Node {
+        return _node("details")
+    }
+
+    fun summary() -> Node {
+        return _node("summary")
+    }
+
+    fun pre() -> Node {
+        return _node("pre")
+    }
+
+    fun em() -> Node {
+        return _node("em")
+    }
+
+    fun mark() -> Node {
+        return _node("mark")
+    }
+
+    fun hr() -> Node {
+        return _node("hr")
+    }
+
+    fun br() -> Node {
+        return _node("br")
+    }
+
+    fun ol() -> Node {
+        return _node("ol")
+    }
+
+    fun h3() -> Node {
+        return _node("h3")
+    }
+
+    fun h4() -> Node {
+        return _node("h4")
+    }
+
+    fun fieldset() -> Node {
+        return _node("fieldset")
+    }
+
+    fun legend() -> Node {
+        return _node("legend")
+    }
+
+    fun optgroup(label: String) -> Node {
+        return _node("optgroup").attr("label", label)
+    }
+
+    fun radio(name: String, value: String) -> Node {
+        return _node("input").attr("type", "radio").attr("name", name).attr("value", value)
+    }
+
+    fun number_field(placeholder: String) -> Node {
+        return _node("input").attr("type", "number").attr("placeholder", placeholder)
+    }
+
+    fun email_field(placeholder: String) -> Node {
+        return _node("input").attr("type", "email").attr("placeholder", placeholder)
+    }
+
+    fun password_field(placeholder: String) -> Node {
+        return _node("input").attr("type", "password").attr("placeholder", placeholder)
+    }
+
+    fun search_field(placeholder: String) -> Node {
+        return _node("input").attr("type", "search").attr("placeholder", placeholder)
+    }
+
+    // A fragment whose child is `node` only when `cond` holds, otherwise an
+    // empty fragment that renders nothing. Lets a component include optional
+    // structure inline without an if expression around the whole tree.
+    fun when(cond: Bool, node: Node) -> Node {
+        if cond {
+            return _node("").child(node)
+        }
+        return _node("")
+    }
+
+    // A fragment of `build(item)` for each item, in order. The mapper is an
+    // ordinary Raven closure, so components stay declarative instead of
+    // building an intermediate list with a manual loop.
+    fun each<T>(items: List<T>, build: fun(T) -> Node) -> Node {
+        let out = _node("")
+        for item in items {
+            out.kids.push(build(item))
+        }
+        return out
+    }
+}
+
+impl Node {
+    // Invalid or executable-looking attributes are ignored rather than
+    // emitted. CSS utility classes are ordinary class values and pass through.
+    fun attr(self, name: String, value: String) -> Node {
+        if _valid_attr_name(name) {
+            self.attrs.push(Attribute { name, value })
+        }
+        return self
+    }
+
+    fun id(self, value: String) -> Node {
+        return self.attr("id", value)
+    }
+
+    fun class_name(self, value: String) -> Node {
+        return self.attr("class", value)
+    }
+
+    fun title(self, value: String) -> Node {
+        return self.attr("title", value)
+    }
+
+    fun name(self, value: String) -> Node {
+        return self.attr("name", value)
+    }
+
+    fun value(self, value: String) -> Node {
+        return self.attr("value", value)
+    }
+
+    fun placeholder(self, value: String) -> Node {
+        return self.attr("placeholder", value)
+    }
+
+    fun data(self, name: String, value: String) -> Node {
+        return self.attr("data-".concat(name), value)
+    }
+
+    fun aria(self, name: String, value: String) -> Node {
+        return self.attr("aria-".concat(name), value)
+    }
+
+    fun disabled(self, value: Bool) -> Node {
+        if value {
+            return self.attr("disabled", "disabled")
+        }
+        return self
+    }
+
+    // Bind a typed Behavior to an event. The behavior is serialized into a
+    // data attribute the generated runtime reads and interprets; the author
+    // never writes JavaScript, and the value is escaped like any attribute.
+    fun on(self, event: Event, behavior: Behavior) -> Node {
+        return self.attr("data-rw-".concat(event.name()), _serialize_behavior(behavior))
+    }
+
+    fun on_click(self, behavior: Behavior) -> Node {
+        return self.on(Event.Click, behavior)
+    }
+
+    fun on_input(self, behavior: Behavior) -> Node {
+        return self.on(Event.Input, behavior)
+    }
+
+    fun on_change(self, behavior: Behavior) -> Node {
+        return self.on(Event.Change, behavior)
+    }
+
+    fun on_submit(self, behavior: Behavior) -> Node {
+        return self.on(Event.Submit, behavior)
+    }
+
+    fun on_key_down(self, behavior: Behavior) -> Node {
+        return self.on(Event.KeyDown, behavior)
+    }
+
+    fun on_key_up(self, behavior: Behavior) -> Node {
+        return self.on(Event.KeyUp, behavior)
+    }
+
+    fun on_focus(self, behavior: Behavior) -> Node {
+        return self.on(Event.Focus, behavior)
+    }
+
+    fun on_blur(self, behavior: Behavior) -> Node {
+        return self.on(Event.Blur, behavior)
+    }
+
+    fun on_mouse_enter(self, behavior: Behavior) -> Node {
+        return self.on(Event.MouseEnter, behavior)
+    }
+
+    fun on_mouse_leave(self, behavior: Behavior) -> Node {
+        return self.on(Event.MouseLeave, behavior)
+    }
+
+    fun child(self, node: Node) -> Node {
+        self.kids.push(node)
+        return self
+    }
+
+    fun children(self, nodes: List<Node>) -> Node {
+        for node in nodes {
+            self.kids.push(node)
+        }
+        return self
+    }
+
+    // Append `node` only when `cond` holds. Keeps optional children inline in a
+    // build chain instead of splitting the tree around an if expression.
+    fun child_when(self, cond: Bool, node: Node) -> Node {
+        if cond {
+            self.kids.push(node)
+        }
+        return self
+    }
+
+    // Append `build(item)` for each item, in order. Replaces the common
+    // pattern of building a List<Node> with a manual loop before `.children`.
+    fun child_each<T>(self, items: List<T>, build: fun(T) -> Node) -> Node {
+        for item in items {
+            self.kids.push(build(item))
+        }
+        return self
+    }
+
+    fun child_text(self, value: String) -> Node {
+        self.kids.push(Node.text(value))
+        return self
+    }
+
+    fun href(self, url: String) -> Node {
+        if _safe_url(url) {
+            return self.attr("href", url)
+        }
+        return self
+    }
+
+    fun src(self, url: String) -> Node {
+        if _safe_url(url) {
+            return self.attr("src", url)
+        }
+        return self
+    }
+
+    fun render(self) -> String {
+        return _render_node(self)
+    }
+}
+
+fun _safe_url(url: String) -> Bool {
+    let lower = url.trim().to_lower()
+    if lower.length() == 0 {
+        return false
+    }
+    if lower.starts_with("javascript:") || lower.starts_with("vbscript:") || lower.starts_with(
+        "data:",
+    ) {
+        return false
+    }
+    return lower.starts_with("/") || lower.starts_with("./") || lower.starts_with("../") || lower.starts_with(
+        "#",
+    ) || lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:") || lower.starts_with(
+        "tel:",
+    )
+}
+
+fun _render_attrs(attrs: List<Attribute>) -> String {
+    let out = ""
+    let q = _quote()
+    for attr in attrs {
+        out = out.concat(" ").concat(attr.name).concat("=").concat(q)
+        out = out.concat(_escape_html(attr.value)).concat(q)
+    }
+    return out
+}
+
+fun _render_node(node: Node) -> String {
+    if node.tag == "" {
+        if node.value != "" {
+            return _escape_html(node.value)
+        }
+        let fragment_out = ""
+        for kid in node.kids {
+            fragment_out = fragment_out.concat(_render_node(kid))
+        }
+        return fragment_out
+    }
+    let out = "<".concat(node.tag).concat(_render_attrs(node.attrs)).concat(">")
+    if _void_tag(node.tag) {
+        return out
+    }
+    for kid in node.kids {
+        out = out.concat(_render_node(kid))
+    }
+    return out.concat("</").concat(node.tag).concat(">")
+}
+
+trait Component {
+    fun to_node(self) -> Node
+}
+
+impl Component for Node {
+    fun to_node(self) -> Node {
+        return self
+    }
+}
+
+struct CssDeclaration {
+    property: String,
+    value: String,
+}
+
+struct CssRule {
+    selector: String,
+    declarations: List<CssDeclaration>,
+}
+
+struct Stylesheet {
+    rules: List<CssRule>,
+    raw_blocks: List<String>,
+}
+
+fun _css_safe_text(value: String) -> Bool {
+    let lower = value.to_lower()
+    if value.contains("{") || value.contains("}") || value.contains("<") || value.contains(">") || value.contains(
+        ";",
+    ) {
+        return false
+    }
+    if value.contains("/*") || value.contains("*/") {
+        return false
+    }
+    if lower.contains("javascript:") || lower.contains("expression(") {
+        return false
+    }
+    return value.length() > 0
+}
+
+fun _valid_css_property(property: String) -> Bool {
+    if property.length() == 0 {
+        return false
+    }
+    let i = 0
+    if property.starts_with("--") {
+        i = 2
+    }
+    if i == property.length() {
+        return false
+    }
+    while i < property.length() {
+        let b = property.byte_at(i)
+        if !_ascii_letter(b) && !(b >= 48 && b <= 57) && b != 45 {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+impl CssRule {
+    // Infallible: an invalid selector yields a rule with an empty selector that
+    // renders nothing and is skipped by Stylesheet. Use try_new to detect it.
+    fun new(selector: String) -> CssRule {
+        let declarations: List<CssDeclaration> = []
+        if !_css_safe_text(selector) {
+            return CssRule { selector: "", declarations }
+        }
+        return CssRule { selector, declarations }
+    }
+
+    fun try_new(selector: String) -> Result<CssRule, String> {
+        if !_css_safe_text(selector) {
+            return Err("invalid CSS selector")
+        }
+        let declarations: List<CssDeclaration> = []
+        return Ok(CssRule { selector, declarations })
+    }
+
+    fun class_name(name: String) -> CssRule {
+        return CssRule.new(".".concat(name))
+    }
+
+    fun try_class_name(name: String) -> Result<CssRule, String> {
+        return CssRule.try_new(".".concat(name))
+    }
+
+    fun id(name: String) -> CssRule {
+        return CssRule.new("#".concat(name))
+    }
+
+    fun try_id(name: String) -> Result<CssRule, String> {
+        return CssRule.try_new("#".concat(name))
+    }
+
+    fun set(self, property: String, value: String) -> CssRule {
+        if _valid_css_property(property) && _css_safe_text(value) {
+            self.declarations.push(CssDeclaration { property, value })
+        }
+        return self
+    }
+
+    fun try_set(self, property: String, value: String) -> Result<CssRule, String> {
+        if !_valid_css_property(property) {
+            return Err("invalid CSS property")
+        }
+        if !_css_safe_text(value) {
+            return Err("invalid CSS value")
+        }
+        self.declarations.push(CssDeclaration { property, value })
+        return Ok(self)
+    }
+
+    fun render(self) -> String {
+        if self.selector == "" {
+            return ""
+        }
+        let out = self.selector.concat(" {")
+        for declaration in self.declarations {
+            out = out.concat(" ").concat(declaration.property).concat(": ").concat(declaration.value).concat(
+                ";",
+            )
+        }
+        return out.concat(" }")
+    }
+}
+
+impl Stylesheet {
+    fun new() -> Stylesheet {
+        let rules: List<CssRule> = []
+        let raw_blocks: List<String> = []
+        return Stylesheet { rules, raw_blocks }
+    }
+
+    fun add(self, rule: CssRule) -> Stylesheet {
+        self.rules.push(rule)
+        return self
+    }
+
+    // Raw CSS is an explicit build-time escape hatch for authored CSS.
+    fun raw(self, css: String) -> Stylesheet {
+        self.raw_blocks.push(css)
+        return self
+    }
+
+    fun render(self) -> String {
+        let out = ""
+        for rule in self.rules {
+            let rendered = rule.render()
+            if rendered != "" {
+                out = out.concat(rendered).concat("\n")
+            }
+        }
+        for raw in self.raw_blocks {
+            out = out.concat(raw)
+            if !raw.ends_with("\n") {
+                out = out.concat("\n")
+            }
+        }
+        return out
+    }
+}
+
+struct StaticFile {
+    path: String,
+    contents: String,
+}
+
+fun _valid_static_path(path: String) -> Bool {
+    let clean = path.trim()
+    if clean.length() == 0 || clean.starts_with("/") {
+        return false
+    }
+    let parts = clean.split("/")
+    for part in parts {
+        if part.length() == 0 || part == "." || part == ".." {
+            return false
+        }
+        let i = 0
+        while i < part.length() {
+            let b = part.byte_at(i)
+            if b < 32 || b == 34 || b == 58 || b == 60 || b == 62 || b == 92 {
+                return false
+            }
+            i += 1
+        }
+    }
+    let lower = clean.to_lower()
+    return lower != "index.html" && lower != "styles.css" && lower != "app.js"
+}
+
+fun _valid_css_file_path(path: String) -> Bool {
+    return _valid_static_path(path) && path.to_lower().ends_with(".css")
+}
+
+fun _asset_href(path: String) -> String {
+    return "./".concat(path)
+}
+
+impl StaticFile {
+    // Infallible: an invalid path yields a file with an empty path, which Page
+    // and write_static skip. Use try_new to detect an invalid path.
+    fun new(path: String, contents: String) -> StaticFile {
+        let clean = path.trim()
+        if !_valid_static_path(clean) {
+            return StaticFile { path: "", contents }
+        }
+        return StaticFile { path: clean, contents }
+    }
+
+    fun try_new(path: String, contents: String) -> Result<StaticFile, String> {
+        let clean = path.trim()
+        if !_valid_static_path(clean) {
+            return Err("invalid static file path")
+        }
+        return Ok(StaticFile { path: clean, contents })
+    }
+
+    fun css(path: String, contents: String) -> StaticFile {
+        let clean = path.trim()
+        if !_valid_css_file_path(clean) {
+            return StaticFile { path: "", contents }
+        }
+        return StaticFile { path: clean, contents }
+    }
+
+    fun try_css(path: String, contents: String) -> Result<StaticFile, String> {
+        let clean = path.trim()
+        if !_valid_css_file_path(clean) {
+            return Err("CSS file paths must be safe relative .css paths")
+        }
+        return Ok(StaticFile { path: clean, contents })
+    }
+}
+
+enum Effect {
+    SetText(String, String),
+    SetValue(String, String),
+    SetAttribute(String, String, String),
+    AddClass(String, String),
+    RemoveClass(String, String),
+    ToggleClass(String, String),
+    Focus(String),
+    Show(String),
+    Hide(String),
+    ToggleVisible(String),
+    Navigate(String),
+    ScrollTo(String),
+    CopyValue(String, String),
+    CopyToClipboard(String),
+    SetState(String, String),
+    ToggleState(String),
+    IncrementState(String, Int),
+}
+
+// A composable, typed sequence of DOM effects. Attached to an element event via
+// Node.on. raven-web serializes it into the element and interprets it in the
+// generated runtime, so the author never writes JavaScript.
+struct Behavior {
+    effects: List<Effect>,
+    prevent: Bool,
+}
+
+fun _valid_class_token(value: String) -> Bool {
+    if value.length() == 0 {
+        return false
+    }
+    let i = 0
+    while i < value.length() {
+        let b = value.byte_at(i)
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            return false
+        }
+        i += 1
+    }
+    return _css_safe_text(value)
+}
+
+fun behavior() -> Behavior {
+    let effects: List<Effect> = []
+    return Behavior { effects, prevent: false }
+}
+
+impl Behavior {
+    fun new() -> Behavior {
+        return behavior()
+    }
+
+    // Suppress the browser default for the event (form submit, link follow).
+    fun prevent_default(self) -> Behavior {
+        self.prevent = true
+        return self
+    }
+
+    fun set_text(self, selector: String, value: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.SetText(selector, value))
+        }
+        return self
+    }
+
+    fun set_value(self, selector: String, value: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.SetValue(selector, value))
+        }
+        return self
+    }
+
+    fun set_attribute(self, selector: String, name: String, value: String) -> Behavior {
+        if _css_safe_text(selector) && _valid_attr_name(name) {
+            self.effects.push(Effect.SetAttribute(selector, name, value))
+        }
+        return self
+    }
+
+    fun add_class(self, selector: String, class_name: String) -> Behavior {
+        if _css_safe_text(selector) && _valid_class_token(class_name) {
+            self.effects.push(Effect.AddClass(selector, class_name))
+        }
+        return self
+    }
+
+    fun remove_class(self, selector: String, class_name: String) -> Behavior {
+        if _css_safe_text(selector) && _valid_class_token(class_name) {
+            self.effects.push(Effect.RemoveClass(selector, class_name))
+        }
+        return self
+    }
+
+    fun toggle_class(self, selector: String, class_name: String) -> Behavior {
+        if _css_safe_text(selector) && _valid_class_token(class_name) {
+            self.effects.push(Effect.ToggleClass(selector, class_name))
+        }
+        return self
+    }
+
+    fun focus(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.Focus(selector))
+        }
+        return self
+    }
+
+    fun show(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.Show(selector))
+        }
+        return self
+    }
+
+    fun hide(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.Hide(selector))
+        }
+        return self
+    }
+
+    fun toggle_visible(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.ToggleVisible(selector))
+        }
+        return self
+    }
+
+    // Navigate to a safe URL (same rules as href/src). javascript: and other
+    // unsafe schemes are rejected, so this can never smuggle in script.
+    fun navigate(self, url: String) -> Behavior {
+        if _safe_url(url) {
+            self.effects.push(Effect.Navigate(url))
+        }
+        return self
+    }
+
+    fun scroll_to(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.ScrollTo(selector))
+        }
+        return self
+    }
+
+    // Copy the value or text of one element into another.
+    fun copy_value(self, from_selector: String, to_selector: String) -> Behavior {
+        if _css_safe_text(from_selector) && _css_safe_text(to_selector) {
+            self.effects.push(Effect.CopyValue(from_selector, to_selector))
+        }
+        return self
+    }
+
+    fun copy_to_clipboard(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.CopyToClipboard(selector))
+        }
+        return self
+    }
+
+    // Client state effects. State is a page-level key to value store; bindings
+    // (Page.bind_*) reflect it to the DOM, so counters, tabs, and toggles work
+    // with no author JavaScript.
+    fun set_state(self, key: String, value: String) -> Behavior {
+        if _css_safe_text(key) {
+            self.effects.push(Effect.SetState(key, value))
+        }
+        return self
+    }
+
+    fun toggle_state(self, key: String) -> Behavior {
+        if _css_safe_text(key) {
+            self.effects.push(Effect.ToggleState(key))
+        }
+        return self
+    }
+
+    fun increment_state(self, key: String, by: Int) -> Behavior {
+        if _css_safe_text(key) {
+            self.effects.push(Effect.IncrementState(key, by))
+        }
+        return self
+    }
+}
+
+fun _js_string(value: String) -> String {
+    return stringify(JsonValue.Str(value))
+}
+
+// Each effect serializes to a compact JSON op array. Every string is JSON
+// encoded, so selectors and values can never break out of the data attribute.
+fun _op2(code: String, a: String) -> String {
+    return "[".concat(_js_string(code)).concat(",").concat(_js_string(a)).concat("]")
+}
+
+fun _op3(code: String, a: String, b: String) -> String {
+    return "[".concat(_js_string(code)).concat(",").concat(_js_string(a)).concat(",").concat(
+        _js_string(b),
+    ).concat("]")
+}
+
+fun _op4(code: String, a: String, b: String, c: String) -> String {
+    return "[".concat(_js_string(code)).concat(",").concat(_js_string(a)).concat(",").concat(
+        _js_string(b),
+    ).concat(",").concat(_js_string(c)).concat("]")
+}
+
+fun _serialize_effect(effect: Effect) -> String {
+    return match effect {
+        SetText(selector, value) -> _op3("st", selector, value),
+        SetValue(selector, value) -> _op3("sv", selector, value),
+        SetAttribute(selector, name, value) -> _op4("sa", selector, name, value),
+        AddClass(selector, class_name) -> _op3("ac", selector, class_name),
+        RemoveClass(selector, class_name) -> _op3("rc", selector, class_name),
+        ToggleClass(selector, class_name) -> _op3("tc", selector, class_name),
+        Focus(selector) -> _op2("fo", selector),
+        Show(selector) -> _op2("sh", selector),
+        Hide(selector) -> _op2("hd", selector),
+        ToggleVisible(selector) -> _op2("tv", selector),
+        Navigate(url) -> _op2("nav", url),
+        ScrollTo(selector) -> _op2("scr", selector),
+        CopyValue(from_selector, to_selector) -> _op3("cv", from_selector, to_selector),
+        CopyToClipboard(selector) -> _op2("cc", selector),
+        SetState(key, value) -> _op3("ss", key, value),
+        ToggleState(key) -> _op2("ts", key),
+        IncrementState(key, by) -> _op3("is", key, by.to_string()),
+    }
+}
+
+fun _serialize_behavior(behavior: Behavior) -> String {
+    let out = "{".concat(_js_string("p")).concat(":")
+    if behavior.prevent {
+        out = out.concat("1")
+    } else {
+        out = out.concat("0")
+    }
+    out = out.concat(",").concat(_js_string("e")).concat(":[")
+    let first = true
+    for effect in behavior.effects {
+        if !first {
+            out = out.concat(",")
+        }
+        out = out.concat(_serialize_effect(effect))
+        first = false
+    }
+    return out.concat("]}")
+}
+
+// The fixed client runtime. It is generated once, contains no author input, and
+// only interprets the serialized behavior data attributes. Written with single
+// quoted JS strings so the Raven string literal needs no escaping.
+fun _render_runtime() -> String {
+    let out = "(function(){'use strict';"
+    out = out.concat(
+        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];",
+    )
+    out = out.concat(
+        "function rw_find(s){try{return document.querySelector(s);}catch(e){return null;}}",
+    )
+    out = out.concat(
+        "function rw_all(s){try{return document.querySelectorAll(s);}catch(e){return [];}}",
+    )
+    out = out.concat("function rw_vis(el,on){if(el){el.style.display=on?'':'none';}}")
+    out = out.concat("function rw_val(el){return el.value!==undefined?el.value:el.textContent;}")
+    out = out.concat(
+        "function rw_truthy(v){return v!==undefined&&v!==null&&v!==''&&v!=='0'&&v!=='false';}",
+    )
+    out = out.concat(
+        "function rw_apply(){for(var i=0;i<rw_binds.length;i++){var b=rw_binds[i];var kind=b[0];var els=rw_all(b[1]);var val=rw_state[b[2]];for(var j=0;j<els.length;j++){var el=els[j];",
+    )
+    out = out.concat("if(kind==='text'){el.textContent=val===undefined?'':val;}")
+    out = out.concat("else if(kind==='class'){el.classList.toggle(b[3],rw_truthy(val));}")
+    out = out.concat("else if(kind==='attr'){el.setAttribute(b[3],val===undefined?'':val);}")
+    out = out.concat("else if(kind==='visible'){rw_vis(el,rw_truthy(val));}")
+    out = out.concat("}}}")
+    out = out.concat(
+        "function rw_run(list){for(var i=0;i<list.length;i++){var op=list[i];var k=op[0];var a=rw_find(op[1]);",
+    )
+    out = out.concat("if(k==='st'){if(a){a.textContent=op[2];}}")
+    out = out.concat("else if(k==='sv'){if(a){a.value=op[2];}}")
+    out = out.concat("else if(k==='sa'){if(a){a.setAttribute(op[2],op[3]);}}")
+    out = out.concat("else if(k==='ac'){if(a){a.classList.add(op[2]);}}")
+    out = out.concat("else if(k==='rc'){if(a){a.classList.remove(op[2]);}}")
+    out = out.concat("else if(k==='tc'){if(a){a.classList.toggle(op[2]);}}")
+    out = out.concat("else if(k==='fo'){if(a){a.focus();}}")
+    out = out.concat("else if(k==='sh'){rw_vis(a,true);}")
+    out = out.concat("else if(k==='hd'){rw_vis(a,false);}")
+    out = out.concat("else if(k==='tv'){if(a){rw_vis(a,getComputedStyle(a).display==='none');}}")
+    out = out.concat("else if(k==='nav'){window.location.assign(op[1]);}")
+    out = out.concat("else if(k==='scr'){if(a&&a.scrollIntoView){a.scrollIntoView();}}")
+    out = out.concat(
+        "else if(k==='cv'){var cb=rw_find(op[2]);if(a&&cb){var v=rw_val(a);if(cb.value!==undefined){cb.value=v;}else{cb.textContent=v;}}}",
+    )
+    out = out.concat(
+        "else if(k==='cc'){if(a&&navigator.clipboard){navigator.clipboard.writeText(rw_val(a));}}",
+    )
+    out = out.concat("else if(k==='ss'){rw_state[op[1]]=op[2];rw_apply();}")
+    out = out.concat(
+        "else if(k==='ts'){rw_state[op[1]]=rw_truthy(rw_state[op[1]])?'0':'1';rw_apply();}",
+    )
+    out = out.concat(
+        "else if(k==='is'){var cur=parseInt(rw_state[op[1]]||'0',10)||0;var by=parseInt(op[2],10)||0;rw_state[op[1]]=String(cur+by);rw_apply();}",
+    )
+    out = out.concat("}}")
+    out = out.concat(
+        "function rw_dispatch(ev,name){var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-'+name+']');if(!el){return;}var raw=el.getAttribute('data-rw-'+name);if(!raw){return;}var spec;try{spec=JSON.parse(raw);}catch(e){return;}if(spec.p){ev.preventDefault();}rw_run(spec.e||[]);}",
+    )
+    out = out.concat(
+        "var rw_events=['click','input','change','submit','keydown','keyup','focusin','focusout','mouseover','mouseout','scroll'];",
+    )
+    out = out.concat(
+        "for(var j=0;j<rw_events.length;j++){(function(name){document.addEventListener(name,function(ev){rw_dispatch(ev,name);},true);})(rw_events[j]);}",
+    )
+    out = out.concat("rw_apply();")
+    return out.concat("})();")
+}
+
+struct StatePair {
+    key: String,
+    value: String,
+}
+
+// A reflection of client state to the DOM. kind is text, class, attr, or
+// visible; arg carries the class or attribute name where relevant.
+struct Binding {
+    kind: String,
+    selector: String,
+    key: String,
+    arg: String,
+}
+
+fun _serialize_config(state: List<StatePair>, bindings: List<Binding>) -> String {
+    let out = "{".concat(_js_string("s")).concat(":{")
+    let first = true
+    for pair in state {
+        if !first {
+            out = out.concat(",")
+        }
+        out = out.concat(_js_string(pair.key)).concat(":").concat(_js_string(pair.value))
+        first = false
+    }
+    out = out.concat("},").concat(_js_string("b")).concat(":[")
+    let bfirst = true
+    for binding in bindings {
+        if !bfirst {
+            out = out.concat(",")
+        }
+        out = out.concat("[").concat(_js_string(binding.kind)).concat(",").concat(
+            _js_string(binding.selector),
+        ).concat(",").concat(_js_string(binding.key)).concat(",").concat(_js_string(binding.arg)).concat(
+            "]",
+        )
+        bfirst = false
+    }
+    return out.concat("]}")
+}
+
+struct Page {
+    title: String,
+    root: Node,
+    styles: Stylesheet,
+    language: String,
+    description: String,
+    favicon: String,
+    files: List<StaticFile>,
+    css_links: List<String>,
+    state: List<StatePair>,
+    bindings: List<Binding>,
+}
+
+struct StaticOutput {
+    directory: String,
+    paths: List<String>,
+}
+
+impl StaticOutput {
+    fun directory(self) -> String {
+        return self.directory
+    }
+
+    fun paths(self) -> List<String> {
+        return self.paths
+    }
+
+    fun file_count(self) -> Int {
+        return self.paths.len()
+    }
+
+    fun contains(self, path: String) -> Bool {
+        for item in self.paths {
+            if item == path {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+fun _empty_css_links() -> List<String> {
+    let css_links: List<String> = []
+    return css_links
+}
+
+fun _empty_files() -> List<StaticFile> {
+    let files: List<StaticFile> = []
+    return files
+}
+
+fun _empty_state() -> List<StatePair> {
+    let state: List<StatePair> = []
+    return state
+}
+
+fun _empty_bindings() -> List<Binding> {
+    let bindings: List<Binding> = []
+    return bindings
+}
+
+fun _valid_language(value: String) -> Bool {
+    if value.length() == 0 || !_ascii_letter(value.byte_at(0)) {
+        return false
+    }
+    let i = 1
+    while i < value.length() {
+        let b = value.byte_at(i)
+        if !_ascii_letter(b) && !(b >= 48 && b <= 57) && b != 45 {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+impl Page {
+    // Components cross the package boundary as their rendered Node value.
+    fun new(title: String, root: Node) -> Page {
+        return Page {
+            title,
+            root,
+            styles: Stylesheet.new(),
+            language: "en",
+            description: "",
+            favicon: "",
+            files: _empty_files(),
+            css_links: _empty_css_links(),
+            state: _empty_state(),
+            bindings: _empty_bindings(),
+        }
+    }
+
+    // Declare a client state key with an initial value. Behaviors mutate it via
+    // set_state/toggle_state/increment_state, and bindings reflect it to the DOM.
+    fun state(self, key: String, initial: String) -> Page {
+        if _css_safe_text(key) {
+            self.state.push(StatePair { key, value: initial })
+        }
+        return self
+    }
+
+    fun bind_text(self, selector: String, key: String) -> Page {
+        if _css_safe_text(selector) && _css_safe_text(key) {
+            self.bindings.push(Binding { kind: "text", selector, key, arg: "" })
+        }
+        return self
+    }
+
+    fun bind_class(self, selector: String, key: String, class_name: String) -> Page {
+        if _css_safe_text(selector) && _css_safe_text(key) && _valid_class_token(class_name) {
+            self.bindings.push(Binding { kind: "class", selector, key, arg: class_name })
+        }
+        return self
+    }
+
+    fun bind_attr(self, selector: String, key: String, attr: String) -> Page {
+        if _css_safe_text(selector) && _css_safe_text(key) && _valid_attr_name(attr) {
+            self.bindings.push(Binding { kind: "attr", selector, key, arg: attr })
+        }
+        return self
+    }
+
+    fun bind_visible(self, selector: String, key: String) -> Page {
+        if _css_safe_text(selector) && _css_safe_text(key) {
+            self.bindings.push(Binding { kind: "visible", selector, key, arg: "" })
+        }
+        return self
+    }
+
+    fun with_styles(self, styles: Stylesheet) -> Page {
+        self.styles = styles
+        return self
+    }
+
+    fun with_css(self, css: String) -> Page {
+        self.styles.raw(css)
+        return self
+    }
+
+    fun lang(self, value: String) -> Page {
+        if _valid_language(value) {
+            self.language = value
+        }
+        return self
+    }
+
+    fun description(self, value: String) -> Page {
+        self.description = value
+        return self
+    }
+
+    fun favicon(self, url: String) -> Page {
+        if _safe_url(url) {
+            self.favicon = url
+        }
+        return self
+    }
+
+    fun file(self, file: StaticFile) -> Page {
+        if _valid_static_path(file.path) {
+            self.files.push(file)
+        }
+        return self
+    }
+
+    // Write a local stylesheet and add the matching relative link tag.
+    fun css_file(self, path: String, css: String) -> Page {
+        match StaticFile.try_css(path, css) {
+            Ok(file) -> {
+                let href = _asset_href(file.path)
+                self.files.push(file)
+                self.css_links.push(href)
+            },
+            Err(_) -> {},
+        }
+        return self
+    }
+
+    fun link_stylesheet(self, url: String) -> Page {
+        if _safe_url(url) {
+            self.css_links.push(url)
+        }
+        return self
+    }
+
+    fun html(self) -> String {
+        let q = _quote()
+        let out = "<!doctype html><html lang=".concat(q).concat(_escape_html(self.language)).concat(
+            q,
+        ).concat("><head><meta charset=").concat(q).concat("utf-8").concat(q).concat("><meta name=").concat(
+            q,
+        ).concat("viewport").concat(q).concat(" content=").concat(q).concat(
+            "width=device-width, initial-scale=1",
+        ).concat(q).concat("><title>").concat(_escape_html(self.title)).concat("</title><link rel=").concat(
+            q,
+        ).concat("stylesheet").concat(q).concat(" href=").concat(q).concat("styles.css").concat(q).concat(
+            ">",
+        )
+        if self.description.length() > 0 {
+            out = out.concat("<meta name=").concat(q).concat("description").concat(q).concat(" content=").concat(
+                q,
+            ).concat(_escape_html(self.description)).concat(q).concat(">")
+        }
+        if self.favicon.length() > 0 {
+            out = out.concat("<link rel=").concat(q).concat("icon").concat(q).concat(" href=").concat(q).concat(
+                _escape_html(self.favicon),
+            ).concat(q).concat(">")
+        }
+        for url in self.css_links {
+            out = out.concat("<link rel=").concat(q).concat("stylesheet").concat(q).concat(" href=").concat(
+                q,
+            ).concat(_escape_html(url)).concat(q).concat(">")
+        }
+        return out.concat("</head><body>").concat(self.root.render()).concat("<script src=").concat(
+            q,
+        ).concat("app.js").concat(q).concat(" defer></script></body></html>")
+    }
+
+    fun css(self) -> String {
+        return self.styles.render()
+    }
+
+    fun js(self) -> String {
+        return "window.RW_INIT=".concat(_serialize_config(self.state, self.bindings)).concat(";").concat(
+            _render_runtime(),
+        )
+    }
+
+    fun write_static(self, dir: String) -> Result<StaticOutput, Error> {
+        let _created = create_dir_all(dir)?
+        let paths: List<String> = []
+        let _html = write(join(dir, "index.html"), self.html())?
+        paths.push("index.html")
+        let _css = write(join(dir, "styles.css"), self.css())?
+        paths.push("styles.css")
+        let _js = write(join(dir, "app.js"), self.js())?
+        paths.push("app.js")
+        for file in self.files {
+            if _valid_static_path(file.path) {
+                let parent = dirname(file.path)
+                if parent != "." {
+                    let _parent = create_dir_all(join(dir, parent))?
+                }
+                let _file = write(join(dir, file.path), file.contents)?
+                paths.push(file.path)
+            }
+        }
+        return Ok(StaticOutput { directory: dir, paths })
+    }
+}
+
+// A shared shell (header, footer, styles, metadata) that wraps each page body
+// into a complete Page, so a multi-page site keeps one consistent chrome.
+struct Layout {
+    header: Node,
+    footer: Node,
+    styles: Stylesheet,
+    description: String,
+    language: String,
+}
+
+impl Layout {
+    fun new() -> Layout {
+        return Layout {
+            header: Node.fragment(),
+            footer: Node.fragment(),
+            styles: Stylesheet.new(),
+            description: "",
+            language: "en",
+        }
+    }
+
+    fun header(self, node: Node) -> Layout {
+        self.header = node
+        return self
+    }
+
+    fun footer(self, node: Node) -> Layout {
+        self.footer = node
+        return self
+    }
+
+    fun with_styles(self, styles: Stylesheet) -> Layout {
+        self.styles = styles
+        return self
+    }
+
+    fun description(self, value: String) -> Layout {
+        self.description = value
+        return self
+    }
+
+    fun lang(self, value: String) -> Layout {
+        self.language = value
+        return self
+    }
+
+    fun wrap(self, title: String, body: Node) -> Page {
+        let shell = Node.fragment().child(self.header).child(body).child(self.footer)
+        return Page.new(title, shell).lang(self.language).description(self.description).with_styles(
+            self.styles,
+        )
+    }
+}
+
+struct Route {
+    path: String,
+    page: Page,
+}
+
+struct SiteOutput {
+    directory: String,
+    routes: List<String>,
+}
+
+impl SiteOutput {
+    fun directory(self) -> String {
+        return self.directory
+    }
+
+    fun routes(self) -> List<String> {
+        return self.routes
+    }
+
+    fun page_count(self) -> Int {
+        return self.routes.len()
+    }
+
+    fun contains(self, path: String) -> Bool {
+        for item in self.routes {
+            if item == path {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+// A set of routes written as a static site. Each route becomes a clean-URL
+// directory (`/about` to `about/index.html`); write_static also emits a
+// sitemap.xml and a 404.html.
+struct Site {
+    base_url: String,
+    routes: List<Route>,
+    missing: Option<Page>,
+}
+
+fun _normalize_route(path: String) -> String {
+    let p = path.trim()
+    while p.starts_with("/") {
+        p = p.substring(1, p.length())
+    }
+    while p.ends_with("/") {
+        p = p.substring(0, p.length() - 1)
+    }
+    return p
+}
+
+fun _join_url(base: String, path: String) -> String {
+    let b = base
+    while b.ends_with("/") {
+        b = b.substring(0, b.length() - 1)
+    }
+    if path == "" {
+        return b.concat("/")
+    }
+    return b.concat("/").concat(path).concat("/")
+}
+
+fun _default_not_found() -> Page {
+    return Page.new(
+        "Page not found",
+        Node.main_node().child(Node.h1().child_text("404")).child(
+            Node.p().child_text("This page could not be found."),
+        ),
+    )
+}
+
+fun _sitemap(base_url: String, routes: List<Route>) -> String {
+    let q = _quote()
+    let out = "<?xml version=".concat(q).concat("1.0").concat(q).concat(" encoding=").concat(q).concat(
+        "UTF-8",
+    ).concat(q).concat("?>")
+    out = out.concat("<urlset xmlns=").concat(q).concat(
+        "http://www.sitemaps.org/schemas/sitemap/0.9",
+    ).concat(q).concat(">")
+    for route in routes {
+        out = out.concat("<url><loc>").concat(_escape_html(_join_url(base_url, route.path))).concat(
+            "</loc></url>",
+        )
+    }
+    return out.concat("</urlset>")
+}
+
+impl Site {
+    fun new(base_url: String) -> Site {
+        let routes: List<Route> = []
+        return Site { base_url, routes, missing: None }
+    }
+
+    fun page(self, path: String, page: Page) -> Site {
+        self.routes.push(Route { path: _normalize_route(path), page })
+        return self
+    }
+
+    fun not_found(self, page: Page) -> Site {
+        self.missing = Some(page)
+        return self
+    }
+
+    fun write_static(self, dir: String) -> Result<SiteOutput, Error> {
+        let _created = create_dir_all(dir)?
+        let written: List<String> = []
+        for route in self.routes {
+            let target = if route.path == "" {
+                dir
+            } else {
+                join(dir, route.path)
+            }
+            let _out = route.page.write_static(target)?
+            if route.path == "" {
+                written.push("/")
+            } else {
+                written.push("/".concat(route.path).concat("/"))
+            }
+        }
+        let _map = write(join(dir, "sitemap.xml"), _sitemap(self.base_url, self.routes))?
+        let not_found = match self.missing {
+            Some(page) -> page,
+            None -> _default_not_found(),
+        }
+        let _nf = write(join(dir, "404.html"), not_found.html())?
+        return Ok(SiteOutput { directory: dir, routes: written })
+    }
+}
+
+struct ThemeToken {
+    name: String,
+    light: String,
+    dark: String,
+}
+
+// A design-token theme. Tokens are emitted as CSS custom properties so authors
+// reference var(--color-bg) instead of hand-writing color strings. Light values
+// are the default; dark values apply under prefers-color-scheme and under an
+// explicit data-theme attribute (which a Behavior can set for a manual toggle).
+struct Theme {
+    tokens: List<ThemeToken>,
+}
+
+fun _valid_token_name(name: String) -> Bool {
+    if name.length() == 0 || !_ascii_letter(name.byte_at(0)) {
+        return false
+    }
+    let i = 1
+    while i < name.length() {
+        let b = name.byte_at(i)
+        if !_ascii_letter(b) && !(b >= 48 && b <= 57) && b != 45 {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+fun _theme_vars(tokens: List<ThemeToken>, use_dark: Bool) -> String {
+    let out = ""
+    for token in tokens {
+        let value = if use_dark {
+            token.dark
+        } else {
+            token.light
+        }
+        out = out.concat("--").concat(token.name).concat(":").concat(value).concat(";")
+    }
+    return out
+}
+
+fun theme() -> Theme {
+    let tokens: List<ThemeToken> = []
+    return Theme { tokens }
+}
+
+impl Theme {
+    fun new() -> Theme {
+        return theme()
+    }
+
+    // A raw design token, emitted as the custom property --<name>.
+    fun token(self, name: String, light: String, dark: String) -> Theme {
+        if _valid_token_name(name) && _css_safe_text(light) && _css_safe_text(dark) {
+            self.tokens.push(ThemeToken { name, light, dark })
+        }
+        return self
+    }
+
+    // A color token, prefixed color- by convention: color("bg", ...) is --color-bg.
+    fun color(self, name: String, light: String, dark: String) -> Theme {
+        return self.token("color-".concat(name), light, dark)
+    }
+
+    // A mode-independent token (spacing, radius, type scale).
+    fun scale(self, name: String, value: String) -> Theme {
+        return self.token(name, value, value)
+    }
+
+    fun css(self) -> String {
+        let light = _theme_vars(self.tokens, false)
+        let dark = _theme_vars(self.tokens, true)
+        let out = ":root{".concat(light).concat("}")
+        out = out.concat("@media (prefers-color-scheme:dark){:root{").concat(dark).concat("}}")
+        out = out.concat(":root[data-theme=dark]{").concat(dark).concat("}")
+        return out.concat(":root[data-theme=light]{").concat(light).concat("}")
+    }
+
+    fun stylesheet(self) -> Stylesheet {
+        return Stylesheet.new().raw(self.css())
+    }
+}

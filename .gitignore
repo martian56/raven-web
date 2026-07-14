@@ -1,0 +1,8 @@
+# Build and generated output
+/target/
+/dist/
+*.exe
+
+# Preserved pre-2.0 dashboard example and its stylesheet (not part of the library)
+*.bak
+workspace.css

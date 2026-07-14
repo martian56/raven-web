@@ -1,0 +1,291 @@
+import std/fs { exists, read }
+import std/test { assert_false, assert_true }
+import "./lib" { Behavior, CssRule, Layout, Node, Page, Site, StaticFile, Stylesheet, Theme }
+
+fun test_html_escapes_text_and_keeps_class_names() {
+    let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
+        "<script>alert('x')</script>",
+    )
+    let html = root.render()
+    assert_true(html.contains("min-h-screen bg-slate-950"))
+    assert_true(html.contains("&lt;script&gt;"))
+    assert_false(html.contains("<script>alert"))
+}
+
+fun test_attributes_reject_executable_names() {
+    let html = Node.div().attr("onclick", "alert(1)").attr("style", "color: red").data(
+        "id",
+        "card-1",
+    ).aria("label", "Card").title("A safe title").render()
+    assert_false(html.contains("onclick"))
+    assert_false(html.contains("style="))
+    assert_true(html.contains("data-id="))
+    assert_true(html.contains("aria-label="))
+    assert_true(html.contains("title="))
+}
+
+fun test_urls_reject_javascript() {
+    let bad = Node.link("Bad", "javascript:alert(1)").render()
+    let good = Node.link("Docs", "/docs").render()
+    assert_false(bad.contains("href="))
+    assert_true(good.contains("href="))
+}
+
+fun test_css_rules_and_raw_css() {
+    let css = Stylesheet.new().raw(".raw-card { color: red; }").raw(
+        ".text-brand { color: #7dd3fc; }",
+    ).render()
+    assert_true(css.contains(".raw-card"))
+    assert_true(css.contains(".text-brand"))
+
+    // Infallible builders: no match needed to author a valid rule.
+    let rule = CssRule.class_name("card").set("border-radius", "12px")
+    let rendered = Stylesheet.new().add(rule).render()
+    assert_true(rendered.contains(".card"))
+    assert_true(rendered.contains("border-radius: 12px"))
+
+    // try_set still reports an invalid declaration for callers that want it.
+    match rule.try_set("border-radius", "12px") {
+        Ok(_) -> assert_true(true),
+        Err(_) -> assert_true(false),
+    }
+
+    // An invalid selector renders nothing and is skipped by the stylesheet;
+    // try_new reports it for callers that want the signal.
+    let bad = Stylesheet.new().add(CssRule.new(".card {").set("color", "red")).render()
+    assert_true(bad == "")
+    match CssRule.try_new(".card {") {
+        Ok(_) -> assert_true(false),
+        Err(_) -> assert_true(true),
+    }
+}
+
+fun test_page_metadata_and_fixed_runtime() {
+    let root = Node.fragment().child(
+        Node.button("Reveal").on_click(Behavior.new().set_text("#status", "Saved")),
+    ).child(Node.input_field("Search").on_input(Behavior.new().add_class("#status", "searching"))).child(
+        Node.p().id("status").child_text("Hidden"),
+    )
+    let page = Page.new("A < B", root).lang("en-US").description("A safe page description").css_file(
+        "assets/theme.css",
+        ".p-4 { padding: 1rem; }",
+    )
+    assert_true(page.html().contains("lang="))
+    assert_true(page.html().contains("description"))
+    assert_true(page.html().contains("./assets/theme.css"))
+    assert_true(page.html().contains("data-rw-click="))
+    assert_true(page.html().contains("data-rw-input="))
+    assert_false(page.html().contains("onclick"))
+
+    // The runtime is a fixed constant: it never embeds the author's selectors or
+    // values (those live in the HTML), and it interprets the serialized data.
+    let js = page.js()
+    assert_true(js.contains("addEventListener"))
+    assert_true(js.contains("rw_dispatch"))
+    assert_true(js.contains("JSON.parse"))
+    assert_false(js.contains("#status"))
+    assert_false(js.contains("Saved"))
+}
+
+fun test_behaviors_serialize_into_attributes() {
+    let form = Node.form().on_submit(
+        Behavior.new().prevent_default().set_value("#title", "").set_attribute(
+            "#title",
+            "aria-live",
+            "polite",
+        ).add_class("#title", "is-saved").remove_class("#title", "is-editing").focus("#title"),
+    ).child(Node.input_field("Title").id("title")).child(Node.submit_button("Save"))
+    let html = form.render()
+    assert_true(html.contains("data-rw-submit="))
+    // Serialized as escaped JSON, so quotes become &quot; and the prevent flag
+    // and effect strings survive the round trip through the attribute.
+    assert_true(html.contains("&quot;p&quot;:1"))
+    assert_true(html.contains("aria-live"))
+    assert_true(html.contains("is-saved"))
+    // A javascript: navigation target is rejected before it reaches the output.
+    let unsafe = Node.button("Bad").on_click(Behavior.new().navigate("javascript:alert(1)")).render()
+    assert_false(unsafe.contains("javascript"))
+}
+
+fun test_expanded_effects_and_events() {
+    let panel = Node.div().on_mouse_enter(Behavior.new().show("#tip")).on_mouse_leave(
+        Behavior.new().hide("#tip"),
+    ).on_key_down(Behavior.new().toggle_visible("#tip")).child(
+        Node.button("Copy").on_click(Behavior.new().copy_to_clipboard("#code")),
+    ).child(Node.link("Top", "#top").on_click(Behavior.new().prevent_default().scroll_to("#top")))
+    let html = panel.render()
+    assert_true(html.contains("data-rw-mouseover="))
+    assert_true(html.contains("data-rw-mouseout="))
+    assert_true(html.contains("data-rw-keydown="))
+    assert_true(html.contains("data-rw-click="))
+}
+
+fun test_client_state_and_bindings() {
+    let ui = Node.div().child(Node.p().id("out")).child(
+        Node.button("inc").on_click(Behavior.new().increment_state("counter", 1)),
+    ).child(Node.button("reset").on_click(Behavior.new().set_state("counter", "0"))).child(
+        Node.button("toggle").on_click(Behavior.new().toggle_state("drawer")),
+    )
+    let page = Page.new("Counter", ui).state("counter", "0").state("drawer", "0").bind_text(
+        "#out",
+        "counter",
+    ).bind_visible("#panel", "drawer").bind_class("#box", "drawer", "is-open")
+
+    // The runtime config carries initial state and bindings; the fixed runtime
+    // applies them and re-applies after each state change.
+    let js = page.js()
+    assert_true(js.contains("window.RW_INIT="))
+    assert_true(js.contains("rw_apply"))
+    assert_true(js.contains("counter"))
+    assert_true(js.contains("is-open"))
+
+    // The state-changing behaviors are serialized into the element attributes.
+    let html = page.html()
+    assert_true(html.contains("data-rw-click="))
+    assert_true(html.contains("counter"))
+}
+
+fun test_theme_tokens_light_and_dark() {
+    let css = Theme.new().color("bg", "#ffffff", "#0b1020").color("fg", "#111111", "#e6edf6").scale(
+        "space-3",
+        "1rem",
+    ).css()
+    assert_true(css.contains(":root{"))
+    assert_true(css.contains("--color-bg:#ffffff;"))
+    assert_true(css.contains("--space-3:1rem;"))
+    assert_true(css.contains("prefers-color-scheme:dark"))
+    assert_true(css.contains("--color-bg:#0b1020;"))
+    assert_true(css.contains(":root[data-theme=dark]"))
+    assert_true(css.contains(":root[data-theme=light]"))
+
+    // An invalid token name is rejected and never reaches the output.
+    let bad = Theme.new().token("bad name", "x", "y").css()
+    assert_false(bad.contains("bad name"))
+}
+
+fun test_multi_page_site_with_layout() {
+    let layout = Layout.new().lang("en").description("Demo site").header(
+        Node.header().child_text("SiteChrome"),
+    ).footer(Node.footer().child_text("SiteFooter")).with_styles(Stylesheet.new().raw("body{margin:0}"))
+    let home = layout.wrap("Home", Node.h1().child_text("Welcome"))
+    let about = layout.wrap("About", Node.p().child_text("About us"))
+    let site = Site.new("https://example.com").page("/", home).page("/about", about)
+
+    match site.write_static("target/raven-web-site-output") {
+        Ok(out) -> {
+            assert_true(out.page_count() == 2)
+            assert_true(out.contains("/"))
+            assert_true(out.contains("/about/"))
+            assert_true(exists("target/raven-web-site-output/index.html"))
+            assert_true(exists("target/raven-web-site-output/about/index.html"))
+            assert_true(exists("target/raven-web-site-output/sitemap.xml"))
+            assert_true(exists("target/raven-web-site-output/404.html"))
+            match read("target/raven-web-site-output/about/index.html") {
+                Ok(html) -> {
+                    assert_true(html.contains("About us"))
+                    assert_true(html.contains("SiteChrome"))
+                    assert_true(html.contains("SiteFooter"))
+                },
+                Err(_) -> assert_true(false),
+            }
+            match read("target/raven-web-site-output/sitemap.xml") {
+                Ok(xml) -> {
+                    assert_true(xml.contains("https://example.com/about/"))
+                    assert_true(xml.contains("urlset"))
+                },
+                Err(_) -> assert_true(false),
+            }
+        },
+        Err(_) -> assert_true(false),
+    }
+}
+
+struct Item {
+    label: String,
+}
+
+fun test_composition_helpers_and_new_elements() {
+    let items: List<Item> = []
+    items.push(Item { label: "a" })
+    items.push(Item { label: "b" })
+
+    let list = Node.ul().child_each(items, fun(it: Item) -> Node = Node.li().child_text(it.label)).render()
+    assert_true(list.contains("<li>a</li>"))
+    assert_true(list.contains("<li>b</li>"))
+
+    let cond = Node.div().child_when(true, Node.span().child_text("yes")).child_when(
+        false,
+        Node.span().child_text("no"),
+    ).render()
+    assert_true(cond.contains("yes"))
+    assert_false(cond.contains("no"))
+
+    let frag = Node.each(items, fun(it: Item) -> Node = Node.p().child_text(it.label)).render()
+    assert_true(frag.contains("<p>a</p>"))
+    assert_true(frag.contains("<p>b</p>"))
+    assert_true(Node.when(false, Node.div().child_text("hidden")).render() == "")
+
+    let controls = Node.fieldset().child(Node.legend().child_text("Group")).child(
+        Node.radio("choice", "x"),
+    ).child(Node.details().child(Node.summary().child_text("More"))).render()
+    assert_true(controls.contains("<fieldset>"))
+    assert_true(controls.contains("<legend>Group</legend>"))
+    assert_true(controls.contains("<details>"))
+    assert_true(controls.contains("<summary>More</summary>"))
+}
+
+fun test_static_files_are_written_safely() {
+    // Infallible StaticFile.new: no match needed for a valid path.
+    let manifest = StaticFile.new("manifest.webmanifest", "{}")
+    let page = Page.new("Assets", Node.div()).css_file("assets/theme.css", ".theme { color: red; }").file(
+        manifest,
+    )
+    match page.write_static("target/raven-web-test-output") {
+        Ok(output) -> {
+            assert_true(output.contains("index.html"))
+            assert_true(output.contains("assets/theme.css"))
+            assert_true(output.contains("manifest.webmanifest"))
+            assert_true(output.file_count() == 5)
+            assert_true(exists("target/raven-web-test-output/assets/theme.css"))
+            assert_true(exists("target/raven-web-test-output/manifest.webmanifest"))
+            match read("target/raven-web-test-output/assets/theme.css") {
+                Ok(css) -> assert_true(css.contains(".theme")),
+                Err(_) -> assert_true(false),
+            }
+        },
+        Err(_) -> assert_true(false),
+    }
+
+    // An unsafe path yields an empty-path file that Page.file drops, so the
+    // output holds only the three base files. try_css reports the rejection
+    // for callers that want the signal.
+    match Page.new("Drop", Node.div()).file(StaticFile.new("../escape.txt", "x")).write_static(
+        "target/raven-web-drop-output",
+    ) {
+        Ok(output) -> {
+            assert_true(output.file_count() == 3)
+            assert_false(output.contains("../escape.txt"))
+        },
+        Err(_) -> assert_true(false),
+    }
+    match StaticFile.try_css("../bad.css", "body {}") {
+        Ok(_) -> assert_true(false),
+        Err(_) -> assert_true(true),
+    }
+}
+
+fun test_semantic_constructors_render() {
+    let html = Node.form().child(Node.checkbox().id("ready")).child(Node.textarea("Notes")).child(
+        Node.select().child(Node.option("Raven", "raven")),
+    ).child(
+        Node.table().child(
+            Node.tr().child(Node.th().child_text("Name")).child(Node.td().child_text("Web")),
+        ),
+    ).render()
+    assert_true(html.contains("<input type="))
+    assert_true(html.contains("<textarea"))
+    assert_true(html.contains("<select>"))
+    assert_true(html.contains("<option value="))
+    assert_true(html.contains("<table>"))
+    assert_true(html.contains("<th>Name</th>"))
+}

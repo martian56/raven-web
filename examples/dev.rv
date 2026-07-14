@@ -1,0 +1,34 @@
+// Dev workflow: build the site, watch sources, and serve with live reload.
+// Run it, open http://localhost:8080, edit this file, and the page reloads.
+
+import std/io { println }
+import "../lib" { Behavior, Node, Page }
+import "../dev" { reloader, serve, watch }
+
+fun build() {
+    let page = Page.new(
+        "raven-web dev",
+        Node.main_node().child(Node.h1().child_text("Live reload")).child(
+            Node.button("Toggle note").on_click(Behavior.new().toggle_visible("#note")),
+        ).child(Node.p().id("note").child_text("Edit examples/dev.rv and save to see this reload.")),
+    )
+    match page.write_static("dist") {
+        Ok(out) -> println("built ".concat(out.file_count().to_string()).concat(" files")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    let state = reloader()
+    build()
+    spawn(fun() -> Unit {
+        watch(
+            ["examples/dev.rv"],
+            state,
+            fun() -> Unit {
+                build()
+            },
+        )
+    })
+    serve("dist", 8080, state)
+}

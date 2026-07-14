@@ -1,0 +1,144 @@
+// raven-web 2.0 showcase: a self-contained interactive landing page built with
+// only typed Raven. Components implement the Component trait, composition helpers
+// build lists, and every interaction is a typed Behavior. No JavaScript is
+// written by hand; raven-web emits the whole runtime.
+
+import std/io { println }
+import "../lib" { Behavior, Component, Node, Page, Stylesheet }
+
+struct Feature {
+    icon: String,
+    title: String,
+    body: String,
+}
+
+impl Feature {
+    fun new(icon: String, title: String, body: String) -> Feature {
+        return Feature { icon, title, body }
+    }
+}
+
+impl Component for Feature {
+    fun to_node(self) -> Node {
+        return Node.article().class_name("feature").child(
+            Node.div().class_name("feature-icon").aria("hidden", "true").child_text(self.icon),
+        ).child(Node.h3().child_text(self.title)).child(Node.p().child_text(self.body))
+    }
+}
+
+fun features() -> List<Feature> {
+    let items: List<Feature> = []
+    items.push(
+        Feature.new(
+            "[]",
+            "Typed components",
+            "Build UI from structs and impls, checked at compile time.",
+        ),
+    )
+    items.push(
+        Feature.new(
+            "<>",
+            "Zero handwritten JS",
+            "Interactions are typed Behaviors; raven-web emits the runtime.",
+        ),
+    )
+    items.push(
+        Feature.new(
+            "::",
+            "Safe by construction",
+            "Tags, URLs, and CSS are validated and escaped for you.",
+        ),
+    )
+    return items
+}
+
+fun nav() -> Node {
+    return Node.header().class_name("bar").child(
+        Node.strong().class_name("brand").child_text("raven-web"),
+    ).child(
+        Node.button("Menu").class_name("menu-btn").aria("controls", "drawer").on_click(
+            Behavior.new().toggle_class("#drawer", "open"),
+        ),
+    ).child(
+        Node.nav().id("drawer").class_name("drawer").child(
+            Node.link("Features", "#features").on_click(
+                Behavior.new().remove_class("#drawer", "open").scroll_to("#features"),
+            ),
+        ).child(
+            Node.link("Docs", "https://github.com/martian56/raven").on_click(
+                Behavior.new().remove_class("#drawer", "open"),
+            ),
+        ),
+    )
+}
+
+fun hero() -> Node {
+    return Node.section().class_name("hero").child(
+        Node.h1().child_text("Ship static sites in Raven"),
+    ).child(
+        Node.p().class_name("lead").child_text(
+            "One typed API for HTML, CSS, and behavior. Deploy a folder anywhere.",
+        ),
+    ).child(
+        Node.div().class_name("cta").child(
+            Node.button("Get started").class_name("primary").on_click(
+                Behavior.new().set_text("#status", "Would start the guide.").scroll_to("#features"),
+            ),
+        ).child(
+            Node.button("Copy install").class_name("ghost").on_click(
+                Behavior.new().copy_to_clipboard("#install").set_text(
+                    "#status",
+                    "Copied to clipboard.",
+                ),
+            ),
+        ),
+    ).child(
+        Node.code().id("install").class_name("install").child_text(
+            "rvpm add github.com/martian56/raven-web@v0.1.0",
+        ),
+    ).child(Node.p().id("status").class_name("status").aria("live", "polite").child_text("Ready."))
+}
+
+fun subscribe() -> Node {
+    return Node.section().class_name("subscribe").child(
+        Node.form().on_submit(
+            Behavior.new().prevent_default().set_value("#email", "").set_text(
+                "#status",
+                "Thanks, you are on the list.",
+            ),
+        ).child(
+            Node.email_field("you@example.com").id("email").on_input(
+                Behavior.new().set_text("#status", "Keep typing your email."),
+            ),
+        ).child(Node.submit_button("Notify me").class_name("primary")),
+    )
+}
+
+fun page_styles() -> Stylesheet {
+    return Stylesheet.new().raw(
+        ":root{--bg:#0b1020;--fg:#e6edf6;--accent:#7dd3fc}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg)}.bar{display:flex;align-items:center;gap:1rem;padding:1rem 1.5rem}.brand{color:var(--accent)}.menu-btn{margin-left:auto}.drawer{display:none;gap:1rem}.drawer.open{display:flex}.hero{padding:3rem 1.5rem;max-width:52rem}.hero h1{font-size:2.4rem;margin:0 0 .5rem}.lead{opacity:.8}.cta{display:flex;gap:.75rem;margin:1.5rem 0}button{border:0;border-radius:.5rem;padding:.6rem 1rem;cursor:pointer}.primary{background:var(--accent);color:#04283a}.ghost{background:transparent;color:var(--fg);border:1px solid #33415a}.install{display:inline-block;background:#111a30;padding:.5rem .75rem;border-radius:.4rem}.status{opacity:.7;margin-top:1rem}.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1rem;padding:1.5rem}.feature{background:#111a30;border-radius:.6rem;padding:1.25rem}.feature-icon{font-family:monospace;color:var(--accent)}.subscribe{padding:1.5rem;max-width:32rem}.subscribe form{display:flex;gap:.5rem}.subscribe input{flex:1;border-radius:.5rem;border:1px solid #33415a;background:#0d1424;color:var(--fg);padding:.6rem}",
+    )
+}
+
+fun build() -> Page {
+    let body = Node.main_node().child(nav()).child(hero()).child(
+        Node.section().id("features").class_name("features").child_each(
+            features(),
+            fun(feature: Feature) -> Node = feature.to_node(),
+        ),
+    ).child(subscribe())
+    return Page.new("raven-web", body).lang("en").description(
+        "A static-first frontend library for Raven where you never write JavaScript.",
+    ).with_styles(page_styles())
+}
+
+fun main() {
+    match build().write_static("dist") {
+        Ok(output) -> println(
+            "wrote ".concat(output.file_count().to_string()).concat(" files to ").concat(
+                output.directory(),
+            ),
+        ),
+        Err(error) -> println(error.to_string()),
+    }
+}

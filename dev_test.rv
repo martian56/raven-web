@@ -1,0 +1,39 @@
+import std/test { assert_false, assert_true }
+import "./dev" { inject_reload, resolve_path }
+
+fun test_reload_injected_before_body() {
+    let out = inject_reload("<html><body><h1>Hi</h1></body></html>", "/__rw_reload")
+    assert_true(out.contains("<script>"))
+    assert_true(out.contains("/__rw_reload"))
+    assert_true(out.contains("location.reload"))
+    // The client is inserted just before the closing body tag.
+    assert_true(out.contains("</script></body>"))
+}
+
+fun test_reload_appended_when_no_body() {
+    let out = inject_reload("<h1>no body</h1>", "/r")
+    assert_true(out.ends_with("</script>"))
+}
+
+fun test_resolve_path_maps_directories_and_guards_traversal() {
+    match resolve_path("dist", "/") {
+        Some(path) -> assert_true(path.contains("index.html")),
+        None -> assert_true(false),
+    }
+    match resolve_path("dist", "/about/") {
+        Some(path) -> {
+            assert_true(path.contains("about"))
+            assert_true(path.contains("index.html"))
+        },
+        None -> assert_true(false),
+    }
+    match resolve_path("dist", "/styles.css") {
+        Some(path) -> assert_true(path.contains("styles.css")),
+        None -> assert_true(false),
+    }
+    // A traversal attempt is rejected outright.
+    match resolve_path("dist", "/../secret") {
+        Some(_) -> assert_true(false),
+        None -> assert_true(true),
+    }
+}

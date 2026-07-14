@@ -1,0 +1,160 @@
+// raven-web dev server and live reload. Kept in a separate module so a project
+// that only generates static output does not pull in the HTTP and filesystem
+// machinery. Import from "github.com/martian56/raven-web/dev".
+//
+// The live-reload client is part of raven-web's owned runtime: the author never
+// writes JavaScript for it either.
+
+import std/http { Server, Request, Response }
+import std/fs { read, walk, exists, join }
+import std/time { sleep_millis }
+import std/io { println }
+
+// Shared reload token. The watcher bumps it; the reload endpoint serves it; the
+// injected client polls the endpoint and reloads when it changes. A plain Int
+// is enough for a dev tool: a missed tick only delays one reload.
+struct Reloader {
+    token: Int,
+}
+
+fun reloader() -> Reloader {
+    return Reloader { token: 0 }
+}
+
+// The live-reload client. Polls `endpoint` once a second and reloads the page
+// when the token changes from the value present at load.
+fun _reload_client(endpoint: String) -> String {
+    let out = "(function(){'use strict';var last=null;function poll(){"
+    out = out.concat("fetch('").concat(endpoint).concat(
+        "',{cache:'no-store'}).then(function(r){return r.text();})",
+    )
+    out = out.concat(
+        ".then(function(t){if(last===null){last=t;}else if(t!==last){location.reload();}})",
+    )
+    out = out.concat(".catch(function(){});}")
+    return out.concat("setInterval(poll,1000);poll();})();")
+}
+
+// Insert the reload client before </body>, or append it if there is no body tag.
+fun inject_reload(html: String, endpoint: String) -> String {
+    let script = "<script>".concat(_reload_client(endpoint)).concat("</script>")
+    if html.contains("</body>") {
+        return html.replace("</body>", script.concat("</body>"))
+    }
+    return html.concat(script)
+}
+
+// Map a request path to a safe file path under `dir`. Rejects any path that
+// tries to escape the directory, and maps directory-style paths to index.html.
+fun resolve_path(dir: String, url_path: String) -> Option<String> {
+    if url_path.contains("..") {
+        return None
+    }
+    let rel = url_path
+    while rel.starts_with("/") {
+        rel = rel.substring(1, rel.length())
+    }
+    if rel == "" {
+        return Some(join(dir, "index.html"))
+    }
+    if rel.ends_with("/") {
+        return Some(join(dir, rel.concat("index.html")))
+    }
+    return Some(join(dir, rel))
+}
+
+fun _is_html(path: String) -> Bool {
+    return path.ends_with(".html") || path.ends_with(".htm")
+}
+
+fun _serve_one(dir: String, endpoint: String, req: Request) -> Response {
+    // The reload endpoint is served before any file lookup.
+    if req.path == endpoint {
+        return Response.not_found()
+    }
+    return match resolve_path(dir, req.path) {
+        Some(path) -> {
+            let target = if exists(path) {
+                path
+            } else {
+                join(path, "index.html")
+            }
+            if !exists(target) {
+                Response.not_found()
+            } else if _is_html(target) {
+                match read(target) {
+                    Ok(body) -> Response.html(inject_reload(body, endpoint)),
+                    Err(_) -> Response.not_found(),
+                }
+            } else {
+                Response.file(target)
+            }
+        },
+        None -> Response.not_found(),
+    }
+}
+
+// Serve `dir` over HTTP on `port` with live reload. Blocks. Register the same
+// file handler for several path depths (the router matches by segment count),
+// which covers any static site up to five path segments deep.
+fun serve(dir: String, port: Int, state: Reloader) {
+    let app = Server.new()
+    let endpoint = "/__rw_reload"
+    app.get(endpoint, fun(req: Request) -> Response = Response.text(state.token.to_string()))
+    let handler = fun(req: Request) -> Response = _serve_one(dir, endpoint, req)
+    app.get("/", handler)
+    app.get("/:a", handler)
+    app.get("/:a/:b", handler)
+    app.get("/:a/:b/:c", handler)
+    app.get("/:a/:b/:c/:d", handler)
+    app.get("/:a/:b/:c/:d/:e", handler)
+    println("raven-web dev server on http://localhost:".concat(port.to_string()))
+    app.listen("127.0.0.1:".concat(port.to_string()))
+}
+
+// A content signature of the watched files: their paths and contents joined.
+// Changing, adding, or removing a file changes the signature.
+fun _signature(paths: List<String>) -> String {
+    let out = ""
+    for root in paths {
+        match walk(root) {
+            Ok(entries) -> {
+                for entry in entries {
+                    out = out.concat(entry).concat("|")
+                    match read(entry) {
+                        Ok(body) -> {
+                            out = out.concat(body).concat("\n")
+                        },
+                        Err(_) -> {},
+                    }
+                }
+            },
+            Err(_) -> {
+                match read(root) {
+                    Ok(body) -> {
+                        out = out.concat(root).concat("|").concat(body).concat("\n")
+                    },
+                    Err(_) -> {},
+                }
+            },
+        }
+    }
+    return out
+}
+
+// Poll `paths` for changes; on each change run `rebuild` and bump the reload
+// token so connected browsers refresh. Blocks; run it in a goroutine alongside
+// serve, or call serve in a goroutine and this on the main thread.
+fun watch(paths: List<String>, state: Reloader, rebuild: fun() -> Unit) {
+    let previous = _signature(paths)
+    while true {
+        sleep_millis(400)
+        let current = _signature(paths)
+        if current != previous {
+            previous = current
+            rebuild()
+            state.token = state.token + 1
+            println("raven-web rebuilt; reloading")
+        }
+    }
+}
