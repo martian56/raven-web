@@ -17,17 +17,35 @@ struct Signal {
     key: String,
     path: String,
     initial: String,
+    // True when `initial` is already JSON (an object, array, or number) rather
+    // than a plain string that has to be quoted on the way out.
+    raw: Bool,
 }
 
 fun signal(name: String, initial: String) -> Signal {
-    return Signal { key: name, path: name, initial }
+    return Signal { key: name, path: name, initial, raw: false }
+}
+
+// A signal seeded with structured data. This is how a typed Raven value reaches
+// the client without a fetch: derive ToJson on your domain type and hand it
+// over, and the list is already there on first paint.
+//
+//   let tasks = signal_of("tasks", board.to_json())
+//   Node.ul().each_of(tasks, row())
+fun signal_of(name: String, initial: JsonValue) -> Signal {
+    return Signal { key: name, path: name, initial: stringify(initial), raw: true }
 }
 
 impl Signal {
     // Read a field of a stored JSON value: auth.at("token") reads auth.token.
     // Writes still target the root key, so `at` is for reading.
     fun at(self, field: String) -> Signal {
-        return Signal { key: self.key, path: self.path.concat(".").concat(field), initial: "" }
+        return Signal {
+            key: self.key,
+            path: self.path.concat(".").concat(field),
+            initial: "",
+            raw: false,
+        }
     }
 }
 
@@ -86,15 +104,26 @@ impl Ctx {
     // global one; only its key is scoped.
     fun local(self, name: String, initial: String) -> Signal {
         let key = self.id.concat("_").concat(name)
-        self.scope.states.push(StatePair { key, value: initial })
+        self.scope.states.push(StatePair { key, value: initial, raw: false })
         return signal(key, initial)
+    }
+
+    // Instance state seeded with structured data, so a component can be handed
+    // a typed value as its starting point.
+    fun local_of(self, name: String, initial: JsonValue) -> Signal {
+        let key = self.id.concat("_").concat(name)
+        let source = signal_of(key, initial)
+        self.scope.states.push(StatePair { key, value: source.initial, raw: true })
+        return source
     }
 
     // Build the page, registering every local declared during the tree build.
     fun page(self, title: String, view: Node) -> Page {
         let page = Page.new(title, view)
         for pair in self.scope.states {
-            let _ = page.state(pair.key, pair.value)
+            // Carried over whole: a local made with local_of is already JSON and
+            // must not be re-quoted on the way out.
+            page.state.push(StatePair { key: pair.key, value: pair.value, raw: pair.raw })
         }
         return page
     }
@@ -327,19 +356,30 @@ struct Node {
     kids: List<Node>,
     binds: List<NodeBind>,
     mark: Int,
+    // A rejected element. It renders as nothing at all, subtree included: an
+    // element that is refused because it executes code must not leave that code
+    // behind as page text.
+    dropped: Bool,
 }
 
 fun _node(tag: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
     let binds: List<NodeBind> = []
-    return Node { tag, value: "", attrs, kids, binds, mark: -1 }
+    return Node { tag, value: "", attrs, kids, binds, mark: -1, dropped: false }
+}
+
+fun _dropped_node() -> Node {
+    let attrs: List<Attribute> = []
+    let kids: List<Node> = []
+    let binds: List<NodeBind> = []
+    return Node { tag: "", value: "", attrs, kids, binds, mark: -1, dropped: true }
 }
 fun _text_node(value: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
     let binds: List<NodeBind> = []
-    return Node { tag: "", value, attrs, kids, binds, mark: -1 }
+    return Node { tag: "", value, attrs, kids, binds, mark: -1, dropped: false }
 }
 
 fun _quote() -> String {
@@ -361,6 +401,17 @@ fun _name_char(b: Int) -> Bool {
     return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 45
 }
 
+// Elements that run code or hand the page to someone else. raven-web owns the
+// page's JavaScript, so none of these can be authored: <script> would take a
+// raw JS string, <base> would repoint every relative URL, <meta http-equiv>
+// would redirect, and the framing and plugin elements load foreign documents
+// that execute on their own. Head metadata and styles are Page's job (`Page`
+// emits its own meta/link, and `Stylesheet` carries CSS), so nothing legitimate
+// needs them here.
+fun _dangerous_tag(tag: String) -> Bool {
+    return tag == "script" || tag == "base" || tag == "meta" || tag == "link" || tag == "style" || tag == "iframe" || tag == "frame" || tag == "frameset" || tag == "object" || tag == "embed" || tag == "applet" || tag == "portal" || tag == "noembed" || tag == "noscript"
+}
+
 fun _valid_tag(tag: String) -> Bool {
     if tag.length() == 0 || !_ascii_letter(tag.byte_at(0)) {
         return false
@@ -372,7 +423,20 @@ fun _valid_tag(tag: String) -> Bool {
         }
         i += 1
     }
-    return true
+    return !_dangerous_tag(tag.to_lower())
+}
+
+// Attributes whose value is a URL the browser will follow. The typed builders
+// (link, image, href, src) already check these; this is what makes the raw
+// attr() escape hatch check them too.
+fun _url_attr(name: String) -> Bool {
+    return name == "href" || name == "src" || name == "action" || name == "formaction" || name == "xlink:href" || name == "data" || name == "poster" || name == "cite" || name == "ping" || name == "manifest" || name == "longdesc" || name == "background"
+}
+
+// Attributes that inject markup or behaviour rather than naming a URL, so there
+// is no safe value to allow.
+fun _executable_attr(name: String) -> Bool {
+    return name.starts_with("on") || name == "style" || name == "srcdoc" || name == "http-equiv"
 }
 
 fun _valid_attr_name(name: String) -> Bool {
@@ -387,11 +451,7 @@ fun _valid_attr_name(name: String) -> Bool {
         }
         i += 1
     }
-    let lower = name.to_lower()
-    if lower.starts_with("on") || lower == "style" {
-        return false
-    }
-    return true
+    return !_executable_attr(name.to_lower())
 }
 
 fun _void_tag(tag: String) -> Bool {
@@ -439,7 +499,7 @@ impl Node {
     // reject unsafe input. Use try_new to detect an invalid tag.
     fun new(tag: String) -> Node {
         if !_valid_tag(tag) {
-            return _node("")
+            return _dropped_node()
         }
         return _node(tag.to_lower())
     }
@@ -729,6 +789,13 @@ impl Node {
         if !_valid_attr_name(name) {
             return self
         }
+        // A URL attribute set through the raw escape hatch is checked exactly
+        // like one set through link() or image(); otherwise attr("href",
+        // "javascript:...") would walk straight past the safety the typed
+        // builders provide.
+        if _url_attr(name.to_lower()) && !_safe_url(value) {
+            return self
+        }
         for existing in self.attrs {
             if existing.name == name {
                 if name == "class" {
@@ -1009,21 +1076,60 @@ impl Node {
     }
 }
 
+// Browsers ignore ASCII whitespace and control characters inside a scheme, so
+// "java\tscript:x" navigates like "javascript:x". Strip them before deciding
+// what a URL says. The stripped form is only used to judge; what gets emitted
+// is the author's original value.
+fun _strip_url_noise(value: String) -> String {
+    let out = ""
+    let i = 0
+    while i < value.length() {
+        let b = value.byte_at(i)
+        if b > 32 && b != 127 {
+            out = out.concat(value.substring(i, i + 1))
+        }
+        i += 1
+    }
+    return out.to_lower()
+}
+
+// True when the value begins with a URL scheme (^[a-z][a-z0-9+-.]*:). A path
+// like "a/b:c" is not a scheme, because the slash ends the run first.
+fun _has_scheme(value: String) -> Bool {
+    if value.length() == 0 || !_ascii_letter(value.byte_at(0)) {
+        return false
+    }
+    let i = 1
+    while i < value.length() {
+        let b = value.byte_at(i)
+        if b == 58 {
+            return true
+        }
+        let scheme_char = _ascii_letter(b) || (b >= 48 && b <= 57) || b == 43 || b == 45 || b == 46
+        if !scheme_char {
+            return false
+        }
+        i += 1
+    }
+    return false
+}
+
+// A URL is safe when it names a scheme we allow, or names no scheme at all (it
+// is then relative, and cannot navigate anywhere the page could not already).
+// Judging by scheme rather than by a prefix allowlist means an ordinary
+// relative path like "rows.json" works, while javascript:, vbscript:, and
+// data: stay rejected however they are spelled.
 fun _safe_url(url: String) -> Bool {
-    let lower = url.trim().to_lower()
-    if lower.length() == 0 {
+    let cleaned = _strip_url_noise(url)
+    if cleaned.length() == 0 {
         return false
     }
-    if lower.starts_with("javascript:") || lower.starts_with("vbscript:") || lower.starts_with(
-        "data:",
-    ) {
-        return false
+    if !_has_scheme(cleaned) {
+        return true
     }
-    return lower.starts_with("/") || lower.starts_with("./") || lower.starts_with("../") || lower.starts_with(
-        "#",
-    ) || lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:") || lower.starts_with(
-        "tel:",
-    )
+    return cleaned.starts_with("http://") || cleaned.starts_with("https://") || cleaned.starts_with(
+        "mailto:",
+    ) || cleaned.starts_with("tel:")
 }
 
 fun _render_attrs(attrs: List<Attribute>) -> String {
@@ -1037,6 +1143,9 @@ fun _render_attrs(attrs: List<Attribute>) -> String {
 }
 
 fun _render_node(node: Node) -> String {
+    if node.dropped {
+        return ""
+    }
     if node.tag == "" {
         if node.value != "" {
             return _escape_html(node.value)
@@ -1956,6 +2065,7 @@ fun _render_runtime() -> String {
 struct StatePair {
     key: String,
     value: String,
+    raw: Bool,
 }
 
 // A reflection of client state to the DOM. kind is text, class, attr, visible,
@@ -2101,7 +2211,12 @@ fun _serialize_config(
         if !first {
             out = out.concat(",")
         }
-        out = out.concat(_js_string(pair.key)).concat(":").concat(_js_string(pair.value))
+        let encoded = if pair.raw {
+            pair.value
+        } else {
+            _js_string(pair.value)
+        }
+        out = out.concat(_js_string(pair.key)).concat(":").concat(encoded)
         first = false
     }
     out = out.concat("},").concat(_js_string("b")).concat(":[")
@@ -2262,14 +2377,30 @@ impl Page {
     // set_state/toggle_state/increment_state, and bindings reflect it to the DOM.
     fun state(self, key: String, initial: String) -> Page {
         if _css_safe_text(key) {
-            self.state.push(StatePair { key, value: initial })
+            self.state.push(StatePair { key, value: initial, raw: false })
         }
         return self
     }
 
-    // Register a typed Signal so its initial value reaches the client.
+    // Register a typed Signal so its initial value reaches the client. A signal
+    // made with signal_of keeps its structure rather than arriving as a quoted
+    // string.
     fun signal(self, source: Signal) -> Page {
-        return self.state(source.key, source.initial)
+        if !_css_safe_text(source.key) {
+            return self
+        }
+        self.state.push(StatePair { key: source.key, value: source.initial, raw: source.raw })
+        return self
+    }
+
+    // Structured initial state, straight from a typed Raven value. This is the
+    // seam the domain crosses without a fetch: the data is in the document on
+    // first paint, so there is no request and no empty flash.
+    fun data(self, key: String, value: JsonValue) -> Page {
+        if _css_safe_text(key) {
+            self.state.push(StatePair { key, value: stringify(value), raw: true })
+        }
+        return self
     }
 
     // Every binding the view declared about itself, plus any added through the
@@ -2771,7 +2902,7 @@ impl Router {
 
     // A route parameter, read like any other signal.
     fun param(self, name: String) -> Signal {
-        return Signal { key: "route", path: "route.".concat(name), initial: "" }
+        return Signal { key: "route", path: "route.".concat(name), initial: "", raw: false }
     }
 
     fun route_count(self) -> Int {

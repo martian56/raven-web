@@ -635,6 +635,65 @@ fun test_forms_model_fields_and_express_validation() {
     }
 }
 
+// raven-web claims to own all of the page's JavaScript. These are the ways that
+// claim could be broken, each of which worked until v0.9.0.
+fun test_no_element_can_smuggle_in_script() {
+    // <script> took a raw JS string and it executed. Now the element cannot be
+    // built at all, and its contents do not survive as page text either.
+    let smuggled = Node.new("script").child_text("alert(1)").render()
+    assert_true(smuggled == "")
+    assert_false(smuggled.contains("alert"))
+
+    // Elements that execute or hand the page away are refused wholesale.
+    assert_true(Node.new("iframe").attr("srcdoc", "<script>alert(1)</script>").render() == "")
+    assert_true(Node.new("base").attr("href", "https://evil.example").render() == "")
+    assert_true(Node.new("object").render() == "")
+    assert_true(Node.new("embed").render() == "")
+    assert_true(Node.new("style").child_text("body{}").render() == "")
+    match Node.try_new("script") {
+        Ok(_) -> assert_true(false),
+        Err(_) -> assert_true(true),
+    }
+
+    // srcdoc and http-equiv inject markup and behaviour, so no value is safe.
+    assert_false(Node.div().attr("srcdoc", "<script>alert(1)</script>").render().contains("srcdoc"))
+    assert_false(Node.div().attr("http-equiv", "refresh").render().contains("http-equiv"))
+
+    // The raw attr() escape hatch is checked exactly like link()/image() are.
+    // Every one of these used to be emitted verbatim.
+    assert_false(Node.new("a").attr("href", "javascript:alert(1)").render().contains("javascript"))
+    assert_false(Node.new("img").attr("src", "javascript:alert(1)").render().contains("javascript"))
+    assert_false(
+        Node.new("form").attr("action", "javascript:alert(1)").render().contains("javascript"),
+    )
+    assert_false(
+        Node.new("button").attr("formaction", "javascript:alert(1)").render().contains("javascript"),
+    )
+    // Spelling tricks: case, and the control characters browsers strip out of a
+    // scheme before following it.
+    assert_false(Node.new("a").attr("href", "  JaVaScRiPt:alert(1)").render().contains("alert"))
+    assert_false(Node.new("a").attr("href", "java\tscript:alert(1)").render().contains("alert"))
+    assert_false(Node.new("a").attr("href", "java\nscript:alert(1)").render().contains("alert"))
+    assert_false(Node.new("a").attr("href", "data:text/html,<script>").render().contains("data:"))
+}
+
+// Judging a URL by its scheme rather than by a prefix allowlist means ordinary
+// relative paths work. "rows.json" used to be dropped, which was a silent no-op.
+fun test_relative_urls_are_allowed_and_schemes_are_judged() {
+    assert_true(Node.new("a").attr("href", "rows.json").render().contains("href=\"rows.json\""))
+    assert_true(Node.image("logo.png", "Logo").render().contains("src=\"logo.png\""))
+    assert_true(Node.link("Docs", "/docs").render().contains("href=\"/docs\""))
+    assert_true(Node.link("Up", "../x").render().contains("href="))
+    assert_true(Node.link("Site", "https://example.com").render().contains("href="))
+    assert_true(Node.link("Mail", "mailto:a@b.co").render().contains("href="))
+    assert_true(Node.link("Anchor", "#top").render().contains("href="))
+    // A colon that is not a scheme (it comes after a slash) is still a path.
+    assert_true(Node.new("a").attr("href", "a/b:c").render().contains("href="))
+    // An unknown scheme is not allowed through.
+    assert_false(Node.link("Bad", "vbscript:msgbox(1)").render().contains("href="))
+    assert_false(Node.link("Bad", "file:///etc/passwd").render().contains("href="))
+}
+
 fun test_semantic_constructors_render() {
     let html = Node.form().child(Node.checkbox().id("ready")).child(Node.textarea("Notes")).child(
         Node.select().child(Node.option("Raven", "raven")),

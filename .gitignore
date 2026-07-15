@@ -12,3 +12,6 @@ dist-probe/
 dist-components/
 dist-router/
 dist-form/
+dist-typed/
+dist-xss/
+dist-tagcheck/

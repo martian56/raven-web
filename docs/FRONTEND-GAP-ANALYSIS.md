@@ -48,6 +48,23 @@ Option A (grow the library, no compiler change) is the chosen path. Status:
   the email rule accepted `a@b.co` and rejected four near-misses, cross-field
   rules held, and unchecking a box re-disabled submit.
 
+- **Tier 3.7 (`Page.state` takes only a String): fixed in v0.9.0.** `signal_of`
+  seeds a signal from a typed Raven value via `@derive(ToJson)`, so the domain
+  crosses into the client as structured data and renders on first paint with no
+  request. Verified in a real DOM with `fetch`/`XHR` stubbed to fail: three rows
+  rendered, zero requests made, and the state was a real array.
+- **A security defect found and fixed in v0.9.0, not in the original list.** The
+  README claimed the public API never accepts a raw JS string. It did:
+  `Node.new("script").child_text(js)` emitted a live `<script>` that executed
+  (confirmed in a DOM), and the raw `attr()` escape hatch skipped the URL
+  checking that `link()`/`image()` do, so `attr("href", "javascript:...")`,
+  `action`, `formaction`, `<base href>`, `<meta http-equiv=refresh>`, and
+  `<iframe srcdoc>` all went out verbatim. Executing elements and attributes are
+  now refused subtree-and-all, and every URL is judged by scheme wherever it is
+  set. The lesson worth keeping: the typed constructors were safe and the escape
+  hatch beside them was not, so the safety claim was only ever true of the path
+  the tests took.
+
 **Where that leaves the goal.** Every Tier 2, 3, and 4 item that Option A can
 reach is now done, and Tier 1 is half done: components are reusable, typed, and
 stateful, but only where the tree is known at build time. What is left is the

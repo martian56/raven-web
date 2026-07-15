@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.8.0"
+"github.com/martian56/raven-web" = "v0.9.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -29,9 +29,10 @@ Raven Web is tested with Raven 2.26.1 on Linux and Windows.
 - `Component` lets a Raven struct expose `to_node()` for a stateless view.
 - `app()` and `Ctx` give reusable components typed props and per-instance local
   state, so the same component can be used many times on one page.
-- `Signal` is a typed handle to client state; `Expr` computes over signals for
-  conditionals, derived text, and form validation. `bind_value` makes a field
-  controlled, and `disabled_when` gates a submit button on a rule.
+- `Signal` is a typed handle to client state; `signal_of` seeds one with a typed
+  Raven value, so data reaches the client with no fetch. `Expr` computes over
+  signals for conditionals, derived text, and form validation. `bind_value`
+  makes a field controlled, and `disabled_when` gates a submit button on a rule.
 - `Behavior` is a typed, composable sequence of DOM effects attached directly to
   an element event. No handwritten JavaScript, no stringly-typed action names.
 - `Page` owns metadata, styles, client state, bindings, and output files.
@@ -118,6 +119,57 @@ Node bindings: `text_of`, `class_of`, `attr_of`, `visible_if`, `hidden_if`,
 raven-web resolves the dependency graph at build time, so a write updates only
 the bindings that read that signal, and lists reconcile by key rather than being
 rebuilt (an input inside a row keeps its value and focus).
+
+## Typed data, without a fetch
+
+`signal_of` seeds a signal with structured data, so a typed Raven value reaches
+the client as data rather than as a quoted string. The list is in the document
+on first paint: no request, no spinner, no empty flash.
+
+```rust
+@derive(ToJson)
+struct Task {
+    id: Int,
+    title: String,
+    status: String,
+}
+
+let tasks = signal_of("tasks", board().to_json())   // board() -> List<Task>
+Node.ul().each_of(tasks, row())
+Page.new("Board", body).signal(tasks)
+```
+
+It stays live state: behaviors can clear or replace it, and `fetch` can refill
+it later. `Page.data(key, json)` does the same for a key you address directly,
+and `ctx.local_of` gives a component structured local state.
+
+## Safety, and what is enforced
+
+raven-web owns all of the page's JavaScript: the public API accepts no raw JS
+string, and the runtime is a fixed constant carrying zero author input. What
+backs that up:
+
+- **No element can execute.** `script`, `style`, `base`, `meta`, `link`,
+  `iframe`, `frame`, `frameset`, `object`, `embed`, `applet`, `portal`,
+  `noembed`, and `noscript` are refused, subtree and all. Head metadata is
+  `Page`'s job and CSS is `Stylesheet`'s, so nothing legitimate needs them.
+- **No attribute can execute.** `on*`, `style`, `srcdoc`, and `http-equiv` are
+  refused.
+- **Every URL is judged by scheme**, whether it is set through `link`/`image` or
+  through the raw `attr` escape hatch. `http`, `https`, `mailto`, `tel`, and
+  scheme-less relative paths are allowed; everything else, including
+  `javascript:`, `vbscript:`, and `data:`, is refused however it is spelled
+  (mixed case, or with the control characters browsers strip out of a scheme).
+- **Text is escaped**, and template data is injected with `textContent` and
+  `setAttribute`, never `innerHTML`.
+- **Nothing is `eval`'d.** Expressions and behaviors are data the runtime walks;
+  `Expr.matches` compiles an authored pattern as a `RegExp`, which is data too.
+- The generated JS is always an external file, so page data cannot break out of
+  a `<script>` tag.
+
+Rejections are silent by design (a `try_*` twin reports them instead), so an
+element or URL that breaks a rule renders as nothing rather than as an unsafe
+approximation.
 
 ## Expressions
 
@@ -307,6 +359,8 @@ than string-injected script.
   state surviving navigation.
 - `examples/form.rv`: a validated signup form with controlled fields,
   cross-field rules, and errors that wait until a field is left.
+- `examples/typed_data.rv`: a typed `List<Task>` rendered on first paint with no
+  request.
 - `examples/dev.rv`: the build, watch, and serve dev loop.
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).

@@ -1,0 +1,66 @@
+// Typed server data crossing into the client with no fetch.
+//
+// `Task` is an ordinary Raven struct with @derive(ToJson). signal_of seeds the
+// page with it, so the list is in the document on first paint: no request, no
+// spinner, no empty flash. The same signal is still live, so a behavior can
+// filter or replace it afterwards.
+
+import std/io { println }
+import std/json { ToJson }
+import "../lib" { Behavior, Expr, Node, Page, Signal, Stylesheet, signal, signal_of }
+
+@derive(ToJson)
+struct Task {
+    id: Int,
+    title: String,
+    status: String,
+}
+
+// Stands in for a database read at build time.
+fun board() -> List<Task> {
+    return [
+        Task { id: 1, title: "Draft the spec", status: "done" },
+        Task { id: 2, title: "Wire the router", status: "doing" },
+        Task { id: 3, title: "Ship the release", status: "todo" },
+    ]
+}
+
+fun row() -> Node {
+    return Node.li().class_name("row").child(Node.span().class_name("t").child_text("{{title}}")).child(
+        Node.span().class_name("s").child_text("{{status}}"),
+    )
+}
+
+fun styles() -> Stylesheet {
+    return Stylesheet.new().raw(
+        "body{font-family:system-ui,sans-serif;max-width:34rem;margin:0 auto;padding:2rem;color:#0f172a}h1{font-size:1.5rem}ul{list-style:none;padding:0}.row{display:flex;justify-content:space-between;padding:.5rem .75rem;border:1px solid #e2e8f0;border-radius:.375rem;margin-bottom:.5rem}.s{color:#64748b;font-size:.8rem}button{border:1px solid #cbd5e1;border-radius:.375rem;background:#fff;padding:.25rem .6rem;cursor:pointer;margin-right:.5rem}.empty{color:#b45309}",
+    )
+}
+
+fun build() -> Page {
+    // The typed value goes straight in. No fetch, no {{}} in a URL, no string
+    // of JSON written by hand.
+    let tasks = signal_of("tasks", board().to_json())
+
+    let body = Node.main_node().child(Node.h1().child_text("board")).child(
+        Node.p().class_name("count").text_expr(
+            Expr.concat(Expr.len(Expr.of(tasks)), Expr.text(" tasks, rendered with no request")),
+        ),
+    ).child(Node.ul().class_name("rows").each_of(tasks, row())).child(
+        Node.p().class_name("empty").child_text("Nothing left.").visible_when(
+            Expr.is_empty(Expr.of(tasks)),
+        ),
+    ).child(
+        // Still live state: it can be emptied like any other signal.
+        Node.button("Clear").class_name("clear").on_click(Behavior.new().clear(tasks)),
+    )
+
+    return Page.new("typed data", body).signal(tasks).with_styles(styles())
+}
+
+fun main() {
+    match build().write_static("dist-typed") {
+        Ok(out) -> println("typed_data: wrote ${out.file_count()} files"),
+        Err(error) -> println(error.message()),
+    }
+}
