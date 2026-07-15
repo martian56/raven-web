@@ -1231,39 +1231,13 @@ fun _serialize_behavior(behavior: Behavior) -> String {
 // The fixed client runtime. It is generated once, contains no author input, and
 // only interprets the serialized behavior data attributes. Written with single
 // quoted JS strings so the Raven string literal needs no escaping.
+// The generated runtime. The dependency graph is resolved at build time, so a
+// state write updates only the bindings that read that key, and a list binding
+// reconciles by key and updates rows in place instead of rebuilding the subtree.
 fun _render_runtime() -> String {
     let out = "(function(){'use strict';"
     out = out.concat(
-        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];",
-    )
-    // Dotted state paths, so a binding can read into a stored JSON response.
-    out = out.concat(
-        "function rw_get(path){var parts=String(path).split('.');var cur=rw_state;for(var i=0;i<parts.length;i++){if(cur===null||cur===undefined){return undefined;}cur=cur[parts[i]];}return cur;}",
-    )
-    out = out.concat(
-        "function rw_persist(key){if(rw_keep.indexOf(key)<0){return;}try{var v=rw_state[key];if(v===undefined||v===null){localStorage.removeItem('rw:'+key);}else{localStorage.setItem('rw:'+key,JSON.stringify(v));}}catch(e){}}",
-    )
-    out = out.concat(
-        "function rw_load(){for(var i=0;i<rw_keep.length;i++){var k=rw_keep[i];try{var v=localStorage.getItem('rw:'+k);if(v!==null){rw_state[k]=JSON.parse(v);}}catch(e){}}}",
-    )
-    // Escape a value being substituted into a serialized behavior attribute.
-    // Uses char codes (92 backslash, 34 quote) to avoid escape sequences here.
-    out = out.concat(
-        "function rw_esc(v){var o='';for(var i=0;i<v.length;i++){var c=v.charCodeAt(i);if(c===92||c===34){o+=String.fromCharCode(92);}o+=v.charAt(i);}return o;}",
-    )
-    out = out.concat(
-        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=item[f];if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
-    )
-    // Fill a cloned template: item data only ever reaches the DOM through
-    // setAttribute and nodeValue, never innerHTML, so it cannot inject markup.
-    out = out.concat(
-        "function rw_fill(node,item){if(node.attributes){for(var i=0;i<node.attributes.length;i++){var a=node.attributes[i];if(a.value.indexOf('{{')>=0){node.setAttribute(a.name,rw_subst(a.value,item,a.name.indexOf('data-rw-')===0));}}}for(var c=node.firstChild;c;c=c.nextSibling){if(c.nodeType===3){if(c.nodeValue.indexOf('{{')>=0){c.nodeValue=rw_subst(c.nodeValue,item,false);}}else if(c.nodeType===1){rw_fill(c,item);}}}",
-    )
-    out = out.concat(
-        "function rw_list(b){var box=rw_find(b[1]);if(!box){return;}var items=rw_get(b[2]);box.innerHTML='';if(!items||!items.length){return;}var tmp=document.createElement('div');tmp.innerHTML=b[3];var proto=tmp.firstElementChild;if(!proto){return;}var ff=b[4];var fv=b[5];for(var i=0;i<items.length;i++){var it=items[i];if(ff!==''&&String(it[ff])!==fv){continue;}var n=proto.cloneNode(true);rw_fill(n,it);box.appendChild(n);}}",
-    )
-    out = out.concat(
-        "function rw_fetch(spec){var body=null;var headers={};if(spec.b&&spec.b.length){var o={};for(var i=0;i<spec.b.length;i++){var f=spec.b[i];if(f[1]===''){o[f[0]]=f[2];}else{var el=rw_find(f[1]);o[f[0]]=el?rw_val(el):'';}}body=JSON.stringify(o);headers['Content-Type']='application/json';}if(spec.a){var t=rw_get(spec.a);if(t){headers['Authorization']='Bearer '+t;}}fetch(spec.u,{method:spec.m,headers:headers,body:body}).then(function(r){if(!r.ok){throw new Error('http '+r.status);}var ct=r.headers.get('content-type')||'';return ct.indexOf('json')>=0?r.json():null;}).then(function(data){if(spec.s){rw_state[spec.s]=data;rw_persist(spec.s);}rw_apply();rw_run(spec.t||[]);}).catch(function(){rw_run(spec.e||[]);});}",
+        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];var rw_deps=rw_init.d||{};",
     )
     out = out.concat(
         "function rw_find(s){try{return document.querySelector(s);}catch(e){return null;}}",
@@ -1277,16 +1251,63 @@ fun _render_runtime() -> String {
         "function rw_truthy(v){return v!==undefined&&v!==null&&v!==''&&v!=='0'&&v!=='false';}",
     )
     out = out.concat(
-        "function rw_apply(){for(var i=0;i<rw_binds.length;i++){var b=rw_binds[i];var kind=b[0];if(kind==='list'){rw_list(b);continue;}var els=rw_all(b[1]);var val=rw_get(b[2]);for(var j=0;j<els.length;j++){var el=els[j];",
+        "function rw_get(path){var parts=String(path).split('.');var cur=rw_state;for(var i=0;i<parts.length;i++){if(cur===null||cur===undefined){return undefined;}cur=cur[parts[i]];}return cur;}",
     )
-    out = out.concat("if(kind==='text'){el.textContent=val===undefined||val===null?'':val;}")
+    out = out.concat(
+        "function rw_persist(key){if(rw_keep.indexOf(key)<0){return;}try{var v=rw_state[key];if(v===undefined||v===null){localStorage.removeItem('rw:'+key);}else{localStorage.setItem('rw:'+key,JSON.stringify(v));}}catch(e){}}",
+    )
+    out = out.concat(
+        "function rw_load(){for(var i=0;i<rw_keep.length;i++){var k=rw_keep[i];try{var v=localStorage.getItem('rw:'+k);if(v!==null){rw_state[k]=JSON.parse(v);}}catch(e){}}}",
+    )
+    out = out.concat(
+        "function rw_esc(v){var o='';for(var i=0;i<v.length;i++){var c=v.charCodeAt(i);if(c===92||c===34){o+=String.fromCharCode(92);}o+=v.charAt(i);}return o;}",
+    )
+    out = out.concat(
+        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=item[f];if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
+    )
+    out = out.concat(
+        "function rw_slots(node){var slots=[];(function walk(n){if(n.attributes){for(var i=0;i<n.attributes.length;i++){var a=n.attributes[i];if(a.value.indexOf('{{')>=0){slots.push([n,a.name,a.value]);}}}for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){if(c.nodeValue.indexOf('{{')>=0){slots.push([c,null,c.nodeValue]);}}else if(c.nodeType===1){walk(c);}}})(node);node._rwS=slots;return node;}",
+    )
+    out = out.concat(
+        "function rw_fill(node,item){var s=node._rwS||[];for(var i=0;i<s.length;i++){var e=s[i];if(e[1]){e[0].setAttribute(e[1],rw_subst(e[2],item,e[1].indexOf('data-rw-')===0));}else{var t=rw_subst(e[2],item,false);if(e[0].nodeValue!==t){e[0].nodeValue=t;}}}}",
+    )
+    out = out.concat("function rw_key(it,i){return it&&it.id!==undefined?String(it.id):String(i);}")
+    out = out.concat(
+        "function rw_list(b){var box=rw_find(b[1]);if(!box){return;}var items=rw_get(b[2])||[];var ff=b[4];var fv=b[5];",
+    )
+    out = out.concat(
+        "if(!box._rwP){var tmp=document.createElement('div');tmp.innerHTML=b[3];box._rwP=tmp.firstElementChild;}",
+    )
+    out = out.concat(
+        "var proto=box._rwP;if(!proto){return;}var old=box._rwK||{};var next={};var cursor=box.firstChild;",
+    )
+    out = out.concat(
+        "for(var i=0;i<items.length;i++){var it=items[i];if(ff!==''&&String(it[ff])!==fv){continue;}var k=rw_key(it,i);var node=old[k];if(!node){node=rw_slots(proto.cloneNode(true));}rw_fill(node,it);if(node===cursor){cursor=cursor.nextSibling;}else{box.insertBefore(node,cursor);}next[k]=node;}",
+    )
+    out = out.concat(
+        "for(var k2 in old){if(!next[k2]&&old[k2].parentNode===box){box.removeChild(old[k2]);}}box._rwK=next;}",
+    )
+    out = out.concat(
+        "function rw_apply_one(i){var b=rw_binds[i];if(!b){return;}var kind=b[0];if(kind==='list'){rw_list(b);return;}var els=rw_all(b[1]);var val=rw_get(b[2]);for(var j=0;j<els.length;j++){var el=els[j];",
+    )
+    out = out.concat(
+        "if(kind==='text'){var t=val===undefined||val===null?'':String(val);if(el.textContent!==t){el.textContent=t;}}",
+    )
     out = out.concat("else if(kind==='class'){el.classList.toggle(b[3],rw_truthy(val));}")
     out = out.concat(
         "else if(kind==='attr'){el.setAttribute(b[3],val===undefined||val===null?'':val);}",
     )
     out = out.concat("else if(kind==='visible'){rw_vis(el,rw_truthy(val));}")
     out = out.concat("else if(kind==='hidden'){rw_vis(el,!rw_truthy(val));}")
-    out = out.concat("}}}")
+    out = out.concat("}}")
+    out = out.concat("function rw_apply(){for(var i=0;i<rw_binds.length;i++){rw_apply_one(i);}}")
+    out = out.concat(
+        "function rw_notify(key){var ids=rw_deps[key];if(!ids){return;}for(var i=0;i<ids.length;i++){rw_apply_one(ids[i]);}}",
+    )
+    out = out.concat("function rw_setstate(k,v){rw_state[k]=v;rw_persist(k);rw_notify(k);}")
+    out = out.concat(
+        "function rw_fetch(spec){var body=null;var headers={};if(spec.b&&spec.b.length){var o={};for(var i=0;i<spec.b.length;i++){var f=spec.b[i];if(f[1]===''){o[f[0]]=f[2];}else{var el=rw_find(f[1]);o[f[0]]=el?rw_val(el):'';}}body=JSON.stringify(o);headers['Content-Type']='application/json';}if(spec.a){var t=rw_get(spec.a);if(t){headers['Authorization']='Bearer '+t;}}fetch(spec.u,{method:spec.m,headers:headers,body:body}).then(function(r){if(!r.ok){throw new Error('http '+r.status);}var ct=r.headers.get('content-type')||'';return ct.indexOf('json')>=0?r.json():null;}).then(function(data){if(spec.s){rw_setstate(spec.s,data);}rw_run(spec.t||[]);}).catch(function(){rw_run(spec.e||[]);});}",
+    )
     out = out.concat(
         "function rw_run(list){for(var i=0;i<list.length;i++){var op=list[i];var k=op[0];var a=rw_find(op[1]);",
     )
@@ -1308,14 +1329,14 @@ fun _render_runtime() -> String {
     out = out.concat(
         "else if(k==='cc'){if(a&&navigator.clipboard){navigator.clipboard.writeText(rw_val(a));}}",
     )
-    out = out.concat("else if(k==='ss'){rw_state[op[1]]=op[2];rw_persist(op[1]);rw_apply();}")
+    out = out.concat("else if(k==='ss'){rw_setstate(op[1],op[2]);}")
+    out = out.concat("else if(k==='ts'){rw_setstate(op[1],rw_truthy(rw_state[op[1]])?'0':'1');}")
     out = out.concat(
-        "else if(k==='ts'){rw_state[op[1]]=rw_truthy(rw_state[op[1]])?'0':'1';rw_persist(op[1]);rw_apply();}",
+        "else if(k==='is'){var cur=parseInt(rw_state[op[1]]||'0',10)||0;var by=parseInt(op[2],10)||0;rw_setstate(op[1],String(cur+by));}",
     )
     out = out.concat(
-        "else if(k==='is'){var cur=parseInt(rw_state[op[1]]||'0',10)||0;var by=parseInt(op[2],10)||0;rw_state[op[1]]=String(cur+by);rw_persist(op[1]);rw_apply();}",
+        "else if(k==='cs'){delete rw_state[op[1]];rw_persist(op[1]);rw_notify(op[1]);}",
     )
-    out = out.concat("else if(k==='cs'){delete rw_state[op[1]];rw_persist(op[1]);rw_apply();}")
     out = out.concat("else if(k==='fetch'){rw_fetch(op[1]);}")
     out = out.concat("}}")
     out = out.concat(
@@ -1350,6 +1371,60 @@ struct Binding {
 
 fun _binding(kind: String, selector: String, key: String, arg: String) -> Binding {
     return Binding { kind, selector, key, arg, filter_field: "", filter_value: "" }
+}
+
+// A binding reads a dotted path; it depends on the root state key.
+fun _root_key(path: String) -> String {
+    let parts = path.split(".")
+    if parts.len() == 0 {
+        return path
+    }
+    return parts[0]
+}
+
+fun _contains_str(list: List<String>, value: String) -> Bool {
+    for item in list {
+        if item == value {
+            return true
+        }
+    }
+    return false
+}
+
+// The dependency graph, resolved at build time: state key to the bindings that
+// read it. The runtime uses this to update only what changed, instead of
+// re-running every binding on every state write.
+fun _serialize_deps(bindings: List<Binding>) -> String {
+    let out = "{"
+    let seen: List<String> = []
+    let first = true
+    let i = 0
+    while i < bindings.len() {
+        let key = _root_key(bindings[i].key)
+        if !_contains_str(seen, key) {
+            seen.push(key)
+            if !first {
+                out = out.concat(",")
+            }
+            out = out.concat(_js_string(key)).concat(":[")
+            let j = 0
+            let ifirst = true
+            while j < bindings.len() {
+                if _root_key(bindings[j].key) == key {
+                    if !ifirst {
+                        out = out.concat(",")
+                    }
+                    out = out.concat(j.to_string())
+                    ifirst = false
+                }
+                j = j + 1
+            }
+            out = out.concat("]")
+            first = false
+        }
+        i = i + 1
+    }
+    return out.concat("}")
 }
 
 fun _serialize_config(
@@ -1394,6 +1469,7 @@ fun _serialize_config(
     out = out.concat("],").concat(_js_string("l")).concat(":").concat(
         _serialize_effects(load_effects),
     )
+    out = out.concat(",").concat(_js_string("d")).concat(":").concat(_serialize_deps(bindings))
     return out.concat("}")
 }
 

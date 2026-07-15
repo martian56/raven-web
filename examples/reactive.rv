@@ -1,0 +1,50 @@
+// Proof harness for the compiled dependency graph and keyed reconciliation.
+//
+// Each row holds an uncontrolled <input>. Type into one, then:
+//   "+"      changes unrelated state -> the list must not re-render at all
+//   "Reload" refetches the same rows  -> rows are reused by key, so the typed
+//            text and focus survive
+//
+// Under the old runtime both actions wiped the list with innerHTML and destroyed
+// the input.
+
+import std/io { println }
+import "../lib" { Behavior, Node, Page, StaticFile, Stylesheet, request }
+
+fun rows_json() -> String {
+    return "[{\"id\":1,\"title\":\"Alpha\"},{\"id\":2,\"title\":\"Beta\"},{\"id\":3,\"title\":\"Gamma\"}]"
+}
+
+fun row() -> Node {
+    return Node.li().class_name("row").child(Node.span().class_name("t").child_text("{{title}}")).child(
+        Node.input_field("type here").class_name("probe"),
+    )
+}
+
+fun reload() -> Behavior {
+    return Behavior.new().fetch(request("GET", "./rows.json").store("rows"))
+}
+
+fun build() -> Page {
+    let body = Node.main_node().child(Node.h1().child_text("reconciliation probe")).child(
+        Node.p().child(Node.span().child_text("unrelated counter: ")).child(Node.span().id("n")),
+    ).child(
+        Node.div().child(
+            Node.button("+").id("inc").on_click(Behavior.new().increment_state("n", 1)),
+        ).child(Node.button("Reload").id("reload").on_click(reload())),
+    ).child(Node.ul().id("rows"))
+    return Page.new("probe", body).state("n", "0").state("rows", "").bind_text("#n", "n").bind_list(
+        "#rows",
+        "rows",
+        row(),
+    ).file(StaticFile.new("rows.json", rows_json())).on_load(reload()).with_styles(
+        Stylesheet.new().raw("body{font-family:system-ui;padding:2rem}.row{margin:.25rem 0}"),
+    )
+}
+
+fun main() {
+    match build().write_static("dist-probe") {
+        Ok(out) -> println("probe: wrote ${out.file_count()} files"),
+        Err(error) -> println(error.message()),
+    }
+}

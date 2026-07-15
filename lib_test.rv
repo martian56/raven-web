@@ -205,6 +205,31 @@ fun test_list_binding_and_persisted_state() {
     assert_true(js.contains("rw_fetch"))
 }
 
+fun test_updates_are_targeted_and_lists_reconcile() {
+    let page = Page.new("x", Node.ul().id("rows")).state("n", "0").state("rows", "").bind_text(
+        "#n",
+        "n",
+    ).bind_list("#rows", "rows", Node.li().child_text("{{title}}")).bind_text("#org", "auth.org_id")
+    let js = page.js()
+
+    // The dependency graph is resolved at build time: state key -> the bindings
+    // that read it. A dotted path depends on its root key.
+    assert_true(js.contains("\"d\":{"))
+    assert_true(js.contains("\"n\":[0]"))
+    assert_true(js.contains("\"rows\":[1]"))
+    assert_true(js.contains("\"auth\":[2]"))
+
+    // A state write notifies only that key's bindings, instead of re-running all.
+    assert_true(js.contains("function rw_setstate(k,v){rw_state[k]=v;rw_persist(k);rw_notify(k);}"))
+    assert_true(js.contains("var ids=rw_deps[key]"))
+
+    // Lists reconcile by key and update rows in place: no subtree wipe, so focus
+    // and DOM identity survive an update.
+    assert_true(js.contains("function rw_key(it,i)"))
+    assert_true(js.contains("insertBefore"))
+    assert_false(js.contains("box.innerHTML=''"))
+}
+
 fun test_theme_tokens_light_and_dark() {
     let css = Theme.new().color("bg", "#ffffff", "#0b1020").color("fg", "#111111", "#e6edf6").scale(
         "space-3",
