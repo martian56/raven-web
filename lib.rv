@@ -9,22 +9,62 @@ struct Attribute {
     value: String,
 }
 
+// A typed handle to one piece of client state. Declare it once with `signal`,
+// then pass the value everywhere: views bind to it and behaviors write to it
+// without naming a CSS selector or repeating a state string. `key` is the root
+// state key; `path` is what a reader resolves (the same, or deeper via `at`).
+struct Signal {
+    key: String,
+    path: String,
+    initial: String,
+}
+
+fun signal(name: String, initial: String) -> Signal {
+    return Signal { key: name, path: name, initial }
+}
+
+impl Signal {
+    // Read a field of a stored JSON value: auth.at("token") reads auth.token.
+    // Writes still target the root key, so `at` is for reading.
+    fun at(self, field: String) -> Signal {
+        return Signal { key: self.key, path: self.path.concat(".").concat(field), initial: "" }
+    }
+}
+
+// A binding a node declares about itself. The element is identified by a marker
+// raven-web assigns at render time, so no selector is ever written by hand.
+struct NodeBind {
+    kind: String,
+    path: String,
+    arg: String,
+    filter_field: String,
+    filter_value: String,
+}
+
+fun _node_bind(kind: String, path: String, arg: String) -> NodeBind {
+    return NodeBind { kind, path, arg, filter_field: "", filter_value: "" }
+}
+
 struct Node {
     tag: String,
     value: String,
     attrs: List<Attribute>,
     kids: List<Node>,
+    binds: List<NodeBind>,
+    mark: Int,
 }
 
 fun _node(tag: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
-    return Node { tag, value: "", attrs, kids }
+    let binds: List<NodeBind> = []
+    return Node { tag, value: "", attrs, kids, binds, mark: -1 }
 }
 fun _text_node(value: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
-    return Node { tag: "", value, attrs, kids }
+    let binds: List<NodeBind> = []
+    return Node { tag: "", value, attrs, kids, binds, mark: -1 }
 }
 
 fun _quote() -> String {
@@ -547,6 +587,58 @@ impl Node {
         return self
     }
 
+    // Reactive bindings, declared on the node itself. raven-web marks the
+    // element and wires the binding, so a typo cannot silently target nothing:
+    // the signal is a value the compiler checks, not a string it cannot see.
+    fun text_of(self, source: Signal) -> Node {
+        self.binds.push(_node_bind("text", source.path, ""))
+        return self
+    }
+
+    fun class_of(self, source: Signal, class_name: String) -> Node {
+        if _valid_class_token(class_name) {
+            self.binds.push(_node_bind("class", source.path, class_name))
+        }
+        return self
+    }
+
+    fun attr_of(self, source: Signal, name: String) -> Node {
+        if _valid_attr_name(name) {
+            self.binds.push(_node_bind("attr", source.path, name))
+        }
+        return self
+    }
+
+    fun visible_if(self, source: Signal) -> Node {
+        self.binds.push(_node_bind("visible", source.path, ""))
+        return self
+    }
+
+    fun hidden_if(self, source: Signal) -> Node {
+        self.binds.push(_node_bind("hidden", source.path, ""))
+        return self
+    }
+
+    // Repeat `template` once per item of the array in `source`.
+    fun each_of(self, source: Signal, template: Node) -> Node {
+        self.binds.push(_node_bind("list", source.path, template.render()))
+        return self
+    }
+
+    // each_of, but only items whose `field` equals `value` (board columns).
+    fun each_where(self, source: Signal, template: Node, field: String, value: String) -> Node {
+        self.binds.push(
+            NodeBind {
+                kind: "list",
+                path: source.path,
+                arg: template.render(),
+                filter_field: field,
+                filter_value: value,
+            },
+        )
+        return self
+    }
+
     fun render(self) -> String {
         return _render_node(self)
     }
@@ -951,6 +1043,17 @@ impl FetchSpec {
         return self
     }
 
+    // Typed variants: pass the Signal handle instead of a state string.
+    fun store_in(self, target: Signal) -> FetchSpec {
+        return self.store(target.key)
+    }
+
+    // Send the value at `source` as the Bearer token, for example
+    // auth.at("token").
+    fun auth_with(self, source: Signal) -> FetchSpec {
+        return self.auth(source.path)
+    }
+
     fun on_ok(self, behavior: Behavior) -> FetchSpec {
         for effect in behavior.effects {
             self.then.push(effect)
@@ -1114,6 +1217,25 @@ impl Behavior {
         return self
     }
 
+    // Typed state writes. These take the Signal handle rather than a state
+    // string, so the name is written once at the declaration and checked by the
+    // compiler everywhere else.
+    fun set(self, target: Signal, value: String) -> Behavior {
+        return self.set_state(target.key, value)
+    }
+
+    fun toggle(self, target: Signal) -> Behavior {
+        return self.toggle_state(target.key)
+    }
+
+    fun increment(self, target: Signal, by: Int) -> Behavior {
+        return self.increment_state(target.key, by)
+    }
+
+    fun clear(self, target: Signal) -> Behavior {
+        return self.clear_state(target.key)
+    }
+
     // Send a typed HTTP request. raven-web generates the fetch, the JSON body
     // from the named inputs, and the Bearer header; the author writes no JS.
     fun fetch(self, spec: FetchSpec) -> Behavior {
@@ -1240,10 +1362,10 @@ fun _render_runtime() -> String {
         "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];var rw_deps=rw_init.d||{};",
     )
     out = out.concat(
-        "function rw_find(s){try{return document.querySelector(s);}catch(e){return null;}}",
+        "function rw_find(s){try{return document.querySelector(s);}catch(e){console.error('raven-web: bad selector',s);return null;}}",
     )
     out = out.concat(
-        "function rw_all(s){try{return document.querySelectorAll(s);}catch(e){return [];}}",
+        "function rw_all(s){try{return document.querySelectorAll(s);}catch(e){console.error('raven-web: bad selector',s);return [];}}",
     )
     out = out.concat("function rw_vis(el,on){if(el){el.style.display=on?'':'none';}}")
     out = out.concat("function rw_val(el){return el.value!==undefined?el.value:el.textContent;}")
@@ -1371,6 +1493,52 @@ struct Binding {
 
 fun _binding(kind: String, selector: String, key: String, arg: String) -> Binding {
     return Binding { kind, selector, key, arg, filter_field: "", filter_value: "" }
+}
+
+// Marker assignment. A node that declares bindings gets a data-rw-b marker, so
+// the generated binding can target it without the author writing a selector.
+// Assignment is idempotent and pre-order, so html() and js() agree on markers
+// whichever runs first.
+struct BindCounter {
+    next: Int,
+}
+
+fun _assign_marks(node: Node, counter: BindCounter) {
+    if node.binds.len() > 0 && node.mark < 0 {
+        node.mark = counter.next
+        counter.next = counter.next + 1
+        node.attrs.push(Attribute { name: "data-rw-b", value: node.mark.to_string() })
+    }
+    for kid in node.kids {
+        _assign_marks(kid, counter)
+    }
+}
+
+// The value must be quoted: an unquoted CSS attribute value cannot start with a
+// digit, so [data-rw-b=0] is invalid and silently matches nothing.
+fun _mark_selector(mark: Int) -> String {
+    return "[data-rw-b=\"".concat(mark.to_string()).concat("\"]")
+}
+
+fun _collect_binds(node: Node, out: List<Binding>) {
+    if node.mark >= 0 {
+        let selector = _mark_selector(node.mark)
+        for bind in node.binds {
+            out.push(
+                Binding {
+                    kind: bind.kind,
+                    selector,
+                    key: bind.path,
+                    arg: bind.arg,
+                    filter_field: bind.filter_field,
+                    filter_value: bind.filter_value,
+                },
+            )
+        }
+    }
+    for kid in node.kids {
+        _collect_binds(kid, out)
+    }
 }
 
 // A binding reads a dotted path; it depends on the root state key.
@@ -1589,6 +1757,24 @@ impl Page {
         return self
     }
 
+    // Register a typed Signal so its initial value reaches the client.
+    fun signal(self, source: Signal) -> Page {
+        return self.state(source.key, source.initial)
+    }
+
+    // Every binding the view declared about itself, plus any added through the
+    // low-level selector API. Markers are assigned here, idempotently.
+    fun all_bindings(self) -> List<Binding> {
+        let counter = BindCounter { next: 0 }
+        _assign_marks(self.root, counter)
+        let all: List<Binding> = []
+        for binding in self.bindings {
+            all.push(binding)
+        }
+        _collect_binds(self.root, all)
+        return all
+    }
+
     fun bind_text(self, selector: String, key: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
             self.bindings.push(_binding("text", selector, key, ""))
@@ -1670,8 +1856,13 @@ impl Page {
         return self
     }
 
-    // Keep state[key] in localStorage, so it survives a reload (a login token).
-    fun persist(self, key: String) -> Page {
+    // Keep a signal in localStorage, so it survives a reload (a login token).
+    fun persist(self, source: Signal) -> Page {
+        return self.persist_key(source.key)
+    }
+
+    // The low-level form, for state declared with the string API.
+    fun persist_key(self, key: String) -> Page {
         if _css_safe_text(key) {
             self.persisted.push(key)
         }
@@ -1735,6 +1926,8 @@ impl Page {
     }
 
     fun html(self) -> String {
+        let counter = BindCounter { next: 0 }
+        _assign_marks(self.root, counter)
         let q = _quote()
         let out = "<!doctype html><html lang=".concat(q).concat(_escape_html(self.language)).concat(
             q,
@@ -1773,7 +1966,7 @@ impl Page {
 
     fun js(self) -> String {
         return "window.RW_INIT=".concat(
-            _serialize_config(self.state, self.bindings, self.persisted, self.load_effects),
+            _serialize_config(self.state, self.all_bindings(), self.persisted, self.load_effects),
         ).concat(";").concat(_render_runtime())
     }
 

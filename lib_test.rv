@@ -1,6 +1,6 @@
 import std/fs { exists, read }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, CssRule, Layout, Node, Page, Site, StaticFile, Stylesheet, Theme, request }
+import "./lib" { Behavior, CssRule, Layout, Node, Page, Signal, Site, StaticFile, Stylesheet, Theme, request, signal }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -183,7 +183,7 @@ fun test_list_binding_and_persisted_state() {
             Behavior.new().fetch(request("POST", "/tasks/{{id}}/status").auth("auth.token")),
         ),
     )
-    let page = Page.new("Board", Node.ul().id("todo")).state("auth", "").persist("auth").bind_list_where(
+    let page = Page.new("Board", Node.ul().id("todo")).state("auth", "").persist_key("auth").bind_list_where(
         "#todo",
         "tasks.tasks",
         row,
@@ -228,6 +228,45 @@ fun test_updates_are_targeted_and_lists_reconcile() {
     assert_true(js.contains("function rw_key(it,i)"))
     assert_true(js.contains("insertBefore"))
     assert_false(js.contains("box.innerHTML=''"))
+}
+
+fun test_typed_signals_need_no_selectors_or_state_strings() {
+    // Declared once, then passed by value. Nothing below names a CSS selector
+    // or repeats a state string, so a typo is a compile error, not a silent
+    // no-op that renders an empty page.
+    let count = signal("count", "0")
+    let auth = signal("auth", "")
+    let tasks = signal("tasks", "")
+
+    let view = Node.main_node().child(Node.span().text_of(count)).child(
+        Node.button("+").on_click(Behavior.new().increment(count, 1)),
+    ).child(Node.section().visible_if(auth).child(Node.span().text_of(auth.at("org_id")))).child(
+        Node.p().hidden_if(auth).child_text("Please sign in"),
+    ).child(
+        Node.ul().each_where(tasks.at("tasks"), Node.li().child_text("{{title}}"), "status", "todo"),
+    )
+    let page = Page.new("app", view).signal(count).signal(auth).signal(tasks).persist(auth)
+    let js = page.js()
+
+    // raven-web marked the elements itself; the author wrote no selector.
+    assert_true(page.html().contains("data-rw-b="))
+    // The marker value is quoted: an unquoted CSS attribute value cannot
+    // start with a digit, so it would be an invalid selector.
+    assert_true(js.contains("[data-rw-b=\\\"0\\\"]"))
+
+    // Bindings carry the signal's path, and deps key off its root.
+    assert_true(js.contains("\"count\":["))
+    assert_true(js.contains("auth.org_id"))
+    assert_true(js.contains("\"auth\":["))
+    assert_true(js.contains("tasks.tasks"))
+
+    // Registration and persistence came from the handles.
+    assert_true(js.contains("\"count\":\"0\""))
+    assert_true(js.contains("localStorage"))
+
+    // The list filter survives the typed path.
+    assert_true(js.contains("\"status\""))
+    assert_true(js.contains("\"todo\""))
 }
 
 fun test_theme_tokens_light_and_dark() {

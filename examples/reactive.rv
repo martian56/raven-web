@@ -1,15 +1,15 @@
-// Proof harness for the compiled dependency graph and keyed reconciliation.
+// Typed-signal probe. Note what is absent: no CSS selector and no state string
+// is written anywhere below. Signals are declared once and passed by value, so
+// a typo is a compile error rather than a binding that silently targets nothing.
 //
-// Each row holds an uncontrolled <input>. Type into one, then:
-//   "+"      changes unrelated state -> the list must not re-render at all
-//   "Reload" refetches the same rows  -> rows are reused by key, so the typed
+// It also proves the update model: each row holds an uncontrolled <input>.
+//   "+"      writes unrelated state -> the list must not re-render at all
+//   "Reload" refetches the same rows -> rows are reused by key, so the typed
 //            text and focus survive
-//
-// Under the old runtime both actions wiped the list with innerHTML and destroyed
-// the input.
+// (class names below exist only so the browser test can find things.)
 
 import std/io { println }
-import "../lib" { Behavior, Node, Page, StaticFile, Stylesheet, request }
+import "../lib" { Behavior, Node, Page, Signal, StaticFile, Stylesheet, request, signal }
 
 fun rows_json() -> String {
     return "[{\"id\":1,\"title\":\"Alpha\"},{\"id\":2,\"title\":\"Beta\"},{\"id\":3,\"title\":\"Gamma\"}]"
@@ -21,23 +21,27 @@ fun row() -> Node {
     )
 }
 
-fun reload() -> Behavior {
-    return Behavior.new().fetch(request("GET", "./rows.json").store("rows"))
+fun reload_of(rows: Signal) -> Behavior {
+    return Behavior.new().fetch(request("GET", "./rows.json").store_in(rows))
 }
 
 fun build() -> Page {
-    let body = Node.main_node().child(Node.h1().child_text("reconciliation probe")).child(
-        Node.p().child(Node.span().child_text("unrelated counter: ")).child(Node.span().id("n")),
+    let count = signal("n", "0")
+    let rows = signal("rows", "")
+
+    let body = Node.main_node().child(Node.h1().child_text("typed signal probe")).child(
+        Node.p().child(Node.span().child_text("unrelated counter: ")).child(
+            Node.span().class_name("n").text_of(count),
+        ),
     ).child(
         Node.div().child(
-            Node.button("+").id("inc").on_click(Behavior.new().increment_state("n", 1)),
-        ).child(Node.button("Reload").id("reload").on_click(reload())),
-    ).child(Node.ul().id("rows"))
-    return Page.new("probe", body).state("n", "0").state("rows", "").bind_text("#n", "n").bind_list(
-        "#rows",
-        "rows",
-        row(),
-    ).file(StaticFile.new("rows.json", rows_json())).on_load(reload()).with_styles(
+            Node.button("+").class_name("inc").on_click(Behavior.new().increment(count, 1)),
+        ).child(Node.button("Reload").class_name("reload").on_click(reload_of(rows))),
+    ).child(Node.ul().class_name("rows").each_of(rows, row()))
+
+    return Page.new("probe", body).signal(count).signal(rows).file(
+        StaticFile.new("rows.json", rows_json()),
+    ).on_load(reload_of(rows)).with_styles(
         Stylesheet.new().raw("body{font-family:system-ui;padding:2rem}.row{margin:.25rem 0}"),
     )
 }
