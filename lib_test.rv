@@ -1,6 +1,6 @@
 import std/fs { exists, read }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, Ctx, CssRule, Expr, Layout, Node, Page, Signal, Site, StaticFile, Stylesheet, Theme, app, request, signal }
+import "./lib" { Behavior, Ctx, CssRule, Expr, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, request, signal }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -527,6 +527,67 @@ fun test_repeated_attributes_compose_instead_of_colliding() {
     // A component that sets its own class stays composable from outside.
     let composed = disclosure(app().instance(), "Head").class_name("mt-4").render()
     assert_true(composed.contains("disclosure mt-4"))
+}
+
+fun test_router_renders_routes_params_and_guards() {
+    let auth = signal("auth", "")
+    let router = Router.new()
+    let _routes = router.route("/", Node.h1().child_text("Home")).route(
+        "/tasks/:id",
+        Node.span().text_of(router.param("id")),
+    ).route("/settings", Node.h1().child_text("Settings")).requires(auth, "/login").not_found(
+        Node.h1().child_text("Nope"),
+    )
+    assert_true(router.route_count() == 3)
+
+    let html = Page.new("App", router.to_node()).signal(auth).html()
+    // Every view is rendered once, hidden, and tagged with its pattern. The
+    // runtime picks one, so nothing flashes before it does.
+    assert_true(html.contains("data-rw-route=\"/\""))
+    assert_true(html.contains("data-rw-route=\"/tasks/:id\""))
+    assert_true(html.contains("data-rw-route=\"*\""))
+    assert_true(html.contains("hidden=\"hidden\""))
+    assert_true(html.contains("Home"))
+    assert_true(html.contains("Nope"))
+    // The guard travels as data on the route it protects.
+    assert_true(html.contains("data-rw-guard="))
+    assert_true(html.contains("/login"))
+
+    // A trailing slash names the same route, and a pattern must be a path.
+    let normalized = Router.new().route("/about/", Node.div()).to_node().render()
+    assert_true(normalized.contains("data-rw-route=\"/about\""))
+    assert_true(Router.new().route("not-a-path", Node.div()).route_count() == 0)
+    match Router.new().try_route("/ok", Node.div()) {
+        Ok(_) -> assert_true(true),
+        Err(_) -> assert_true(false),
+    }
+    match Router.new().try_route("bad pattern", Node.div()) {
+        Ok(_) -> assert_true(false),
+        Err(_) -> assert_true(true),
+    }
+
+    // A route link stays a real link, so it still opens in a new tab.
+    let link = Node.route_link("Task", "/tasks/1").render()
+    assert_true(link.contains("href=\"/tasks/1\""))
+    assert_true(link.contains("data-rw-link=\"/tasks/1\""))
+}
+
+fun test_spa_writes_a_fallback_document() {
+    let router = Router.new().route("/", Node.h1().child_text("Home"))
+    match Page.new("App", router.to_node()).spa().write_static("target/raven-web-spa-output") {
+        Ok(output) -> {
+            // Static hosts serve 404.html for a path they have no file for, so
+            // the app has to live there too for a deep link to survive a reload.
+            assert_true(output.contains("404.html"))
+            assert_true(output.contains("index.html"))
+        },
+        Err(_) -> assert_true(false),
+    }
+    // A page that is not an SPA does not claim paths it does not own.
+    match Page.new("Plain", Node.div()).write_static("target/raven-web-plain-output") {
+        Ok(output) -> assert_false(output.contains("404.html")),
+        Err(_) -> assert_true(false),
+    }
 }
 
 fun test_semantic_constructors_render() {

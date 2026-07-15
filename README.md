@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.6.1"
+"github.com/martian56/raven-web" = "v0.7.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -34,8 +34,9 @@ Raven Web is tested with Raven 2.26.1 on Linux and Windows.
 - `Behavior` is a typed, composable sequence of DOM effects attached directly to
   an element event. No handwritten JavaScript, no stringly-typed action names.
 - `Page` owns metadata, styles, client state, bindings, and output files.
-- `Site` and `Layout` build multi-page sites with a shared shell, clean-URL
-  routing, a sitemap, and a 404 page.
+- `Router` routes on the client: patterns, params, guards, and history, with no
+  reload. `Site` and `Layout` build multi-page sites with a shared shell,
+  clean-URL routing, a sitemap, and a 404 page.
 - `Stylesheet`, `CssRule`, and `Theme` build authored CSS and design tokens.
 - The `dev` module (`serve`, `watch`) runs a local server with live reload.
 
@@ -173,6 +174,36 @@ yet be repeated per row of a runtime-fetched list. List rows stay `{{field}}`
 templates. See [docs/FRONTEND-GAP-ANALYSIS.md](docs/FRONTEND-GAP-ANALYSIS.md)
 for why, and what it would take to lift it.
 
+## Client router
+
+`Router` renders every route's view once at build time; the runtime shows the
+one matching the address and hides the rest. Navigation changes no document and
+reloads nothing, so state survives it: a fetched list stays fetched.
+
+```rust
+let router = Router.new().route("/", home).route("/tasks/:id", task_detail).route(
+    "/login", login,
+).route("/settings", settings).requires(auth, "/login").not_found(missing)
+
+Page.new("App", Node.main_node().child(nav).child(router.to_node())).spa()
+```
+
+- A `:name` segment captures one path segment, read as `router.param("name")`
+  like any other signal. Params live under the reserved state key `route`.
+- `requires(signal, path)` guards the route added most recently: if the signal
+  is falsy the runtime redirects instead of showing the view, so a guarded view
+  never renders, including on a direct deep link. It is a convenience, not a
+  security boundary. The server still has to protect the data.
+- `Node.route_link(text, path)` keeps a real `href`, so it still opens in a new
+  tab, middle-clicks, and is crawlable; only a plain left click is intercepted.
+- `Behavior.go(path)` navigates from any behavior. `navigate` still does a full
+  page load.
+- Declaration order breaks ties between two matching patterns, and `not_found`
+  is used only when nothing else matched.
+- `Page.spa()` also writes `404.html`. Static hosts serve that for a path they
+  have no file for, which is how a deep link survives a reload. The dev server
+  does the same, so dev matches production.
+
 ## Multi-page sites
 
 ```rust
@@ -243,6 +274,8 @@ than string-injected script.
   per-instance local state, nested two deep.
 - `examples/reactive.rv`: typed signals, targeted updates, keyed list
   reconciliation, and expressions (pluralized text, an empty state).
+- `examples/router.rv`: client routing with params, a guard, a fallback, and
+  state surviving navigation.
 - `examples/dev.rv`: the build, watch, and serve dev loop.
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).

@@ -67,6 +67,32 @@ fun _is_html(path: String) -> Bool {
     return path.ends_with(".html") || path.ends_with(".htm")
 }
 
+// A request for a named file ("/app.js") is a miss when the file is absent. A
+// request without an extension ("/tasks/5") is a path a client router may own,
+// so it gets the fallback instead.
+fun _names_a_file(url_path: String) -> Bool {
+    let segments = url_path.split("/")
+    if segments.len() == 0 {
+        return false
+    }
+    return segments.get(segments.len() - 1).contains(".")
+}
+
+// Serve 404.html when nothing matched, which is what static hosts do: a page
+// marked spa() writes the app there, so a deep link into a client route
+// resolves in dev exactly as it will in production. For a non-SPA site the same
+// file is the real not-found page, so this stays correct either way.
+fun _fallback(dir: String, endpoint: String, url_path: String) -> Response {
+    let page = join(dir, "404.html")
+    if _names_a_file(url_path) || !is_file(page) {
+        return Response.not_found()
+    }
+    return match read(page) {
+        Ok(body) -> Response.html(inject_reload(body, endpoint)),
+        Err(_) -> Response.not_found(),
+    }
+}
+
 fun _serve_one(dir: String, endpoint: String, req: Request) -> Response {
     // The reload endpoint is served before any file lookup.
     if req.path == endpoint {
@@ -82,7 +108,7 @@ fun _serve_one(dir: String, endpoint: String, req: Request) -> Response {
                 join(path, "index.html")
             }
             if !exists(target) {
-                Response.not_found()
+                _fallback(dir, endpoint, req.path)
             } else if _is_html(target) {
                 match read(target) {
                     Ok(body) -> Response.html(inject_reload(body, endpoint)),

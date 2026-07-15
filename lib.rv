@@ -744,6 +744,17 @@ impl Node {
         return self.attr("title", value)
     }
 
+    // A link that navigates a Router without reloading. It keeps a real href, so
+    // it still opens in a new tab, middle-clicks, and is crawlable; only a plain
+    // click is intercepted.
+    fun route_link(text: String, path: String) -> Node {
+        if !_valid_route_pattern(path) {
+            return Node.fragment()
+        }
+        let clean = _normalize_path(path)
+        return Node.link(text, clean).attr("data-rw-link", clean)
+    }
+
     fun name(self, value: String) -> Node {
         return self.attr("name", value)
     }
@@ -1304,6 +1315,7 @@ enum Effect {
     Hide(String),
     ToggleVisible(String),
     Navigate(String),
+    Go(String),
     ScrollTo(String),
     CopyValue(String, String),
     CopyToClipboard(String),
@@ -1506,6 +1518,15 @@ impl Behavior {
         return self
     }
 
+    // Move to a client route without reloading the document, so state survives
+    // the navigation. Use this with Router; `navigate` still does a full load.
+    fun go(self, path: String) -> Behavior {
+        if _valid_route_pattern(path) {
+            self.effects.push(Effect.Go(_normalize_path(path)))
+        }
+        return self
+    }
+
     fun scroll_to(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.ScrollTo(selector))
@@ -1662,6 +1683,7 @@ fun _serialize_effect(effect: Effect) -> String {
         Hide(selector) -> _op2("hd", selector),
         ToggleVisible(selector) -> _op2("tv", selector),
         Navigate(url) -> _op2("nav", url),
+        Go(path) -> _op2("go", path),
         ScrollTo(selector) -> _op2("scr", selector),
         CopyValue(from_selector, to_selector) -> _op3("cv", from_selector, to_selector),
         CopyToClipboard(selector) -> _op2("cc", selector),
@@ -1776,7 +1798,14 @@ fun _render_runtime() -> String {
         "function rw_fetch(spec){var body=null;var headers={};if(spec.b&&spec.b.length){var o={};for(var i=0;i<spec.b.length;i++){var f=spec.b[i];if(f[1]===''){o[f[0]]=f[2];}else{var el=rw_find(f[1]);o[f[0]]=el?rw_val(el):'';}}body=JSON.stringify(o);headers['Content-Type']='application/json';}if(spec.a){var t=rw_get(spec.a);if(t){headers['Authorization']='Bearer '+t;}}fetch(spec.u,{method:spec.m,headers:headers,body:body}).then(function(r){if(!r.ok){throw new Error('http '+r.status);}var ct=r.headers.get('content-type')||'';return ct.indexOf('json')>=0?r.json():null;}).then(function(data){if(spec.s){rw_setstate(spec.s,data);}rw_run(spec.t||[]);}).catch(function(){rw_run(spec.e||[]);});}",
     )
     out = out.concat(
-        "function rw_run(list){for(var i=0;i<list.length;i++){var op=list[i];var k=op[0];var a=rw_find(op[1]);",
+        "var rw_domops={st:1,sv:1,sa:1,ac:1,rc:1,tc:1,fo:1,sh:1,hd:1,tv:1,scr:1,cv:1,cc:1};",
+    )
+    // Only ops whose first argument is a selector look an element up. State
+    // keys and route paths are not selectors, so resolving them eagerly both
+    // wasted a query and reported a bogus "bad selector" for anything that did
+    // not happen to parse as one.
+    out = out.concat(
+        "function rw_run(list){for(var i=0;i<list.length;i++){var op=list[i];var k=op[0];var a=rw_domops[k]?rw_find(op[1]):null;",
     )
     out = out.concat("if(k==='st'){if(a){a.textContent=op[2];}}")
     out = out.concat("else if(k==='sv'){if(a){a.value=op[2];}}")
@@ -1805,7 +1834,42 @@ fun _render_runtime() -> String {
         "else if(k==='cs'){delete rw_state[op[1]];rw_persist(op[1]);rw_notify(op[1]);}",
     )
     out = out.concat("else if(k==='fetch'){rw_fetch(op[1]);}")
+    out = out.concat("else if(k==='go'){rw_go(op[1]);}")
     out = out.concat("}}")
+    // Routing. A pattern segment starting with ':' captures one path segment;
+    // everything else must match literally, and the lengths must agree.
+    out = out.concat("function rw_path(p){var s=String(p||'/');var i=s.indexOf('?');")
+    out = out.concat("if(i>=0){s=s.slice(0,i);}i=s.indexOf('#');if(i>=0){s=s.slice(0,i);}")
+    out = out.concat("while(s.length>1&&s.charAt(s.length-1)==='/'){s=s.slice(0,-1);}")
+    out = out.concat("return s.charAt(0)==='/'?s:'/'+s;}")
+    out = out.concat("function rw_match(pattern,path){if(pattern==='*'){return {};}")
+    out = out.concat("var pp=pattern.split('/'),ap=path.split('/');")
+    out = out.concat("if(pp.length!==ap.length){return null;}var out={};")
+    out = out.concat("for(var i=0;i<pp.length;i++){var seg=pp[i];")
+    out = out.concat("if(seg.charAt(0)===':'){")
+    out = out.concat("if(ap[i]===''){return null;}")
+    out = out.concat(
+        "try{out[seg.slice(1)]=decodeURIComponent(ap[i]);}catch(e){out[seg.slice(1)]=ap[i];}",
+    )
+    out = out.concat("}else if(seg!==ap[i]){return null;}}return out;}")
+    // Declaration order decides which of two matching patterns wins, and the
+    // fallback is only used when nothing else matched.
+    out = out.concat("function rw_route(){var els=document.querySelectorAll('[data-rw-route]');")
+    out = out.concat("if(!els.length){return;}var path=rw_path(location.pathname);")
+    out = out.concat("var hit=null,params=null,fallback=null;")
+    out = out.concat("for(var i=0;i<els.length;i++){var pat=els[i].getAttribute('data-rw-route');")
+    out = out.concat("if(pat==='*'){if(!fallback){fallback=els[i];}continue;}")
+    out = out.concat("if(hit){continue;}var m=rw_match(pat,path);if(m){hit=els[i];params=m;}}")
+    out = out.concat("if(!hit){hit=fallback;params={};}")
+    // A guard runs before the view is shown, so a blocked route never appears.
+    out = out.concat("if(hit){var g=hit.getAttribute('data-rw-guard');if(g){var spec=null;")
+    out = out.concat("try{spec=JSON.parse(g);}catch(e){spec=null;}")
+    out = out.concat("if(spec&&!rw_truthy(rw_get(spec.k))){rw_go(spec.to);return;}}}")
+    out = out.concat("for(var j=0;j<els.length;j++){els[j].hidden=els[j]!==hit;}")
+    out = out.concat("rw_setstate('route',params||{});}")
+    out = out.concat(
+        "function rw_go(path){var to=rw_path(path);if(to!==rw_path(location.pathname)){history.pushState({},'',to);}rw_route();}",
+    )
     out = out.concat(
         "function rw_dispatch(ev,name){var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-'+name+']');if(!el){return;}var raw=el.getAttribute('data-rw-'+name);if(!raw){return;}var spec;try{spec=JSON.parse(raw);}catch(e){return;}if(spec.p){ev.preventDefault();}rw_run(spec.e||[]);}",
     )
@@ -1815,7 +1879,19 @@ fun _render_runtime() -> String {
     out = out.concat(
         "for(var j=0;j<rw_events.length;j++){(function(name){document.addEventListener(name,function(ev){rw_dispatch(ev,name);},true);})(rw_events[j]);}",
     )
-    out = out.concat("rw_load();rw_apply();rw_run(rw_onload);")
+    // Intercept a plain left click on a route link only: a modified click or a
+    // middle click must keep the browser's own behaviour (new tab, download).
+    out = out.concat("document.addEventListener('click',function(ev){")
+    out = out.concat(
+        "if(ev.defaultPrevented||ev.button!==0||ev.metaKey||ev.ctrlKey||ev.shiftKey||ev.altKey){return;}",
+    )
+    out = out.concat(
+        "var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-link]');",
+    )
+    out = out.concat("if(!el){return;}var to=el.getAttribute('data-rw-link');if(!to){return;}")
+    out = out.concat("ev.preventDefault();rw_go(to);});")
+    out = out.concat("window.addEventListener('popstate',function(){rw_route();});")
+    out = out.concat("rw_load();rw_route();rw_apply();rw_run(rw_onload);")
     return out.concat("})();")
 }
 
@@ -2020,6 +2096,7 @@ struct Page {
     bindings: List<Binding>,
     persisted: List<String>,
     load_effects: List<Effect>,
+    single_page: Bool,
 }
 
 struct StaticOutput {
@@ -2111,7 +2188,16 @@ impl Page {
             bindings: _empty_bindings(),
             persisted: _empty_persisted(),
             load_effects: _empty_effects(),
+            single_page: false,
         }
+    }
+
+    // Mark the page as a client-routed app, so write_static also emits 404.html
+    // with the same content. Static hosts serve that for a path they have no
+    // file for, which is how a deep link into a Router route survives a reload.
+    fun spa(self) -> Page {
+        self.single_page = true
+        return self
     }
 
     // Declare a client state key with an initial value. Behaviors mutate it via
@@ -2348,6 +2434,13 @@ impl Page {
         paths.push("styles.css")
         let _js = write(join(dir, "app.js"), self.js())?
         paths.push("app.js")
+        // A client router owns paths the host has no file for. Most static
+        // hosts serve 404.html for an unknown path, so shipping the app there
+        // makes a deep link resolve instead of dying.
+        if self.single_page {
+            let _fallback = write(join(dir, "404.html"), self.html())?
+            paths.push("404.html")
+        }
         for file in self.files {
             if _valid_static_path(file.path) {
                 let parent = dirname(file.path)
@@ -2545,6 +2638,150 @@ impl Site {
         let _nf = write(join(dir, "404.html"), not_found.html())?
         return Ok(SiteOutput { directory: dir, routes: written })
     }
+}
+
+// A client route: the pattern that selects it and the view it shows. A guard
+// names a signal that must be truthy, and where to send the visitor if it is
+// not.
+struct RouteView {
+    pattern: String,
+    view: Node,
+    guard_key: String,
+    guard_to: String,
+}
+
+// A client-side router. Every route's view is rendered once at build time; the
+// runtime shows the one whose pattern matches the address and hides the rest,
+// so navigation changes no document and reloads nothing. State survives a
+// navigation, which is the point: a fetched list stays fetched.
+//
+//   let router = Router.new().route("/", home).route("/tasks/:id", detail).route(
+//       "/settings", settings,
+//   ).requires(auth, "/login").not_found(missing)
+//
+//   Page.new("App", router.to_node()).spa()
+//
+// A pattern segment written `:name` matches one segment and binds it, readable
+// as `router.param("name")`. Params live under the reserved state key `route`.
+struct Router {
+    routes: List<RouteView>,
+    missing: Option<Node>,
+}
+
+impl Router {
+    fun new() -> Router {
+        let routes: List<RouteView> = []
+        return Router { routes, missing: None }
+    }
+
+    // Add a route. An invalid pattern is dropped, like every other builder here;
+    // try_route reports it instead.
+    fun route(self, pattern: String, view: Node) -> Router {
+        if _valid_route_pattern(pattern) {
+            self.routes.push(
+                RouteView { pattern: _normalize_path(pattern), view, guard_key: "", guard_to: "" },
+            )
+        }
+        return self
+    }
+
+    fun try_route(self, pattern: String, view: Node) -> Result<Router, String> {
+        if !_valid_route_pattern(pattern) {
+            return Err("invalid route pattern: ".concat(pattern))
+        }
+        return Ok(self.route(pattern, view))
+    }
+
+    // Guard the route added most recently: if `source` is falsy when the route
+    // matches, the runtime redirects to `redirect_to` instead of showing it.
+    // This is a convenience, not a security boundary; the data still has to be
+    // protected by the server.
+    fun requires(self, source: Signal, redirect_to: String) -> Router {
+        if self.routes.len() == 0 || !_valid_route_pattern(redirect_to) {
+            return self
+        }
+        let last = self.routes.get(self.routes.len() - 1)
+        last.guard_key = source.path
+        last.guard_to = _normalize_path(redirect_to)
+        return self
+    }
+
+    fun not_found(self, view: Node) -> Router {
+        self.missing = Some(view)
+        return self
+    }
+
+    // A route parameter, read like any other signal.
+    fun param(self, name: String) -> Signal {
+        return Signal { key: "route", path: "route.".concat(name), initial: "" }
+    }
+
+    fun route_count(self) -> Int {
+        return self.routes.len()
+    }
+
+    // Every route view, wrapped in a container the runtime shows or hides. The
+    // containers are hidden at build time so no route flashes before the
+    // runtime picks one.
+    fun to_node(self) -> Node {
+        let out = Node.fragment()
+        for item in self.routes {
+            let holder = Node.div().attr("data-rw-route", item.pattern).attr("hidden", "hidden").child(
+                item.view,
+            )
+            if item.guard_key != "" {
+                let _ = holder.attr("data-rw-guard", _guard_json(item.guard_key, item.guard_to))
+            }
+            let _ = out.child(holder)
+        }
+        match self.missing {
+            Some(view) -> {
+                let _ = out.child(
+                    Node.div().attr("data-rw-route", "*").attr("hidden", "hidden").child(view),
+                )
+            },
+            None -> {},
+        }
+        return out
+    }
+}
+
+fun _guard_json(key: String, to: String) -> String {
+    return "{".concat(_js_string("k")).concat(":").concat(_js_string(key)).concat(",").concat(
+        _js_string("to"),
+    ).concat(":").concat(_js_string(to)).concat("}")
+}
+
+// Router paths keep their leading slash (they are matched against
+// location.pathname) and drop a trailing one, so "/about/" and "/about" are the
+// same route. "/" is left alone.
+fun _normalize_path(path: String) -> String {
+    let p = path.trim()
+    if !p.starts_with("/") {
+        p = "/".concat(p)
+    }
+    while p.ends_with("/") && p.length() > 1 {
+        p = p.substring(0, p.length() - 1)
+    }
+    return p
+}
+
+// A pattern is an absolute path of literal segments and `:name` captures.
+fun _valid_route_pattern(pattern: String) -> Bool {
+    if !pattern.starts_with("/") || pattern.length() > 512 {
+        return false
+    }
+    if pattern.contains(" ") || pattern.contains("\"") || pattern.contains("<") || pattern.contains(
+        ">",
+    ) || pattern.contains("?") || pattern.contains("#") {
+        return false
+    }
+    for segment in pattern.split("/") {
+        if segment.starts_with(":") && segment.length() < 2 {
+            return false
+        }
+    }
+    return true
 }
 
 struct ThemeToken {

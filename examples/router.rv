@@ -1,0 +1,98 @@
+// A client-routed app: no reload, real links, route params, and a guard.
+//
+// Every view below is rendered once at build time. The runtime shows the one
+// whose pattern matches the address, so navigating changes no document and
+// keeps state: the counter on the home screen survives a trip to /tasks/2.
+//
+// Note what is absent: no CSS selector, no state string, no JavaScript.
+
+import std/io { println }
+import "../lib" { Behavior, Ctx, Expr, Node, Page, Router, Signal, Stylesheet, app, signal }
+
+fun nav() -> Node {
+    return Node.nav().class_name("nav").child(Node.route_link("Home", "/")).child(
+        Node.route_link("Task 1", "/tasks/1"),
+    ).child(Node.route_link("Task 2", "/tasks/2")).child(Node.route_link("Settings", "/settings")).child(
+        Node.route_link("Missing", "/nope"),
+    )
+}
+
+// A component, so routing and components compose: this counter lives on the
+// home screen and keeps its value across navigation.
+fun counter(ctx: Ctx, label: String) -> Node {
+    let n = ctx.local("n", "0")
+    return Node.p().class_name("counter").child(Node.span().child_text(label)).child(
+        Node.span().class_name("counter-value").text_of(n),
+    ).child(Node.button("+").class_name("counter-inc").on_click(Behavior.new().increment(n, 1)))
+}
+
+fun home(ctx: Ctx) -> Node {
+    return Node.div().class_name("screen home").child(Node.h1().child_text("Home")).child(
+        Node.p().child_text("Navigate away and back: this counter keeps its value."),
+    ).child(counter(ctx.instance(), "clicks: "))
+}
+
+// The :id capture is read like any other signal.
+fun task_detail(router: Router) -> Node {
+    return Node.div().class_name("screen task").child(Node.h1().child_text("Task")).child(
+        Node.p().child(Node.span().child_text("id: ")).child(
+            Node.span().class_name("task-id").text_of(router.param("id")),
+        ),
+    )
+}
+
+fun settings(auth: Signal) -> Node {
+    return Node.div().class_name("screen settings").child(Node.h1().child_text("Settings")).child(
+        Node.p().child_text("Only reachable while signed in."),
+    ).child(
+        Node.button("Sign out").class_name("signout").on_click(
+            Behavior.new().clear(auth).go("/login"),
+        ),
+    )
+}
+
+fun login(auth: Signal) -> Node {
+    return Node.div().class_name("screen login").child(Node.h1().child_text("Sign in")).child(
+        Node.button("Sign in").class_name("signin").on_click(
+            Behavior.new().set(auth, "1").go("/settings"),
+        ),
+    ).child(
+        Node.p().class_name("hint").child_text("You were sent here by the guard.").visible_when(
+            Expr.not(Expr.of(auth)),
+        ),
+    )
+}
+
+fun missing() -> Node {
+    return Node.div().class_name("screen missing").child(Node.h1().child_text("Not found"))
+}
+
+fun styles() -> Stylesheet {
+    return Stylesheet.new().raw(
+        "body{font-family:system-ui,sans-serif;max-width:44rem;margin:0 auto;padding:2rem;color:#0f172a}.nav{display:flex;gap:1rem;padding-bottom:1rem;border-bottom:1px solid #e2e8f0;margin-bottom:1.5rem}.nav a{color:#2563eb;text-decoration:none}.screen h1{font-size:1.5rem}.counter{display:flex;align-items:center;gap:.5rem}.counter-value{font-weight:700}button{border:1px solid #cbd5e1;border-radius:.375rem;background:#fff;padding:.25rem .6rem;cursor:pointer}.hint{color:#b45309}",
+    )
+}
+
+fun build() -> Page {
+    let ui = app()
+    let auth = signal("auth", "")
+    let router = Router.new()
+
+    let _routes = router.route("/", home(ui.instance())).route("/tasks/:id", task_detail(router)).route(
+        "/login",
+        login(auth),
+    ).route("/settings", settings(auth)).requires(auth, "/login").not_found(missing())
+
+    let body = Node.main_node().child(nav()).child(router.to_node())
+
+    // spa() also writes 404.html, so a deep link survives a reload on a static
+    // host that serves it for an unknown path.
+    return ui.page("router", body).signal(auth).spa().with_styles(styles())
+}
+
+fun main() {
+    match build().write_static("dist-router") {
+        Ok(out) -> println("router: wrote ${out.file_count()} files"),
+        Err(error) -> println(error.message()),
+    }
+}

@@ -33,7 +33,15 @@ Option A (grow the library, no compiler change) is the chosen path. Status:
   while the tree is built, so a stateful component still cannot be repeated per
   row of a runtime-fetched list, and rows stay `{{field}}` templates. That half
   needs Option B.
-- **Tier 4 (router, forms): still open.**
+- **Tier 4.8 (no client router): fixed in v0.7.0.** `Router` gives patterns,
+  `:param` captures read as signals, guards, a fallback, real links, and
+  history, with no reload, so state survives navigation. `spa()` and the dev
+  server both serve `404.html` for an unowned path, so a deep link resolves in
+  dev exactly as on a static host. Verified by driving the emitted app in a real
+  DOM at a real URL: deep links, param re-binding, back, guard redirects
+  (including on a direct deep link), and a ctrl-click left to the browser.
+- **Tier 4.9 (no forms story): still open.** Validation, error display, dirty
+  tracking, and controlled inputs are next.
 
 ## 1. What raven-web actually is today
 

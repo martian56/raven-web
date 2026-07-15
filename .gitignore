@@ -10,3 +10,4 @@ workspace.css
 # example output
 dist-probe/
 dist-components/
+dist-router/
