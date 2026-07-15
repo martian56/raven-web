@@ -590,6 +590,51 @@ fun test_spa_writes_a_fallback_document() {
     }
 }
 
+fun test_forms_model_fields_and_express_validation() {
+    let email = signal("email", "")
+    let accepted = signal("accepted", "")
+    let invalid = Expr.or(
+        Expr.not(Expr.matches(Expr.of(email), "^[^@]+@[^@]+$")),
+        Expr.not(Expr.of(accepted)),
+    )
+
+    let form = Node.form().child(Node.input_field("Email").bind_value(email)).child(
+        Node.checkbox().bind_value(accepted),
+    ).child(Node.submit_button("Save").disabled_when(invalid))
+    let page = Page.new("Form", form).signal(email).signal(accepted)
+
+    // A modelled field is marked, so typing writes the signal back.
+    let html = page.html()
+    assert_true(html.contains("data-rw-model=\"email\""))
+    assert_true(html.contains("data-rw-model=\"accepted\""))
+
+    // The rule travels as data, and the button subscribes to both fields it
+    // reads, so it re-evaluates whichever one changes.
+    let js = page.js()
+    assert_true(js.contains("\"re\""))
+    assert_true(js.contains("disabled"))
+    assert_true(js.contains("\"email\":["))
+    assert_true(js.contains("\"accepted\":["))
+    // Still no code: the pattern is compiled as a RegExp, never eval'd.
+    assert_false(js.contains("new Function"))
+    assert_false(js.contains("window.eval"))
+
+    // A field path is a read-only view, so modelling one is refused rather than
+    // silently failing to write.
+    let auth = signal("auth", "")
+    assert_false(
+        Node.input_field("Token").bind_value(auth.at("token")).render().contains("data-rw-model"),
+    )
+    match Node.input_field("Token").try_bind_value(auth.at("token")) {
+        Ok(_) -> assert_true(false),
+        Err(_) -> assert_true(true),
+    }
+    match Node.input_field("Email").try_bind_value(email) {
+        Ok(_) -> assert_true(true),
+        Err(_) -> assert_true(false),
+    }
+}
+
 fun test_semantic_constructors_render() {
     let html = Node.form().child(Node.checkbox().id("ready")).child(Node.textarea("Notes")).child(
         Node.select().child(Node.option("Raven", "raven")),

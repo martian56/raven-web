@@ -40,8 +40,20 @@ Option A (grow the library, no compiler change) is the chosen path. Status:
   dev exactly as on a static host. Verified by driving the emitted app in a real
   DOM at a real URL: deep links, param re-binding, back, guard redirects
   (including on a direct deep link), and a ctrl-click left to the browser.
-- **Tier 4.9 (no forms story): still open.** Validation, error display, dirty
-  tracking, and controlled inputs are next.
+- **Tier 4.9 (no forms story): fixed in v0.8.0.** `bind_value` makes a field
+  controlled, so validation is an `Expr` over the field's own signal, errors are
+  `visible_when` rules, `disabled_when` gates submit, and dirty tracking is a
+  signal set on blur. `Expr.matches` adds patterns. Verified by typing into the
+  emitted form in a real DOM: errors stayed quiet until blur then cleared live,
+  the email rule accepted `a@b.co` and rejected four near-misses, cross-field
+  rules held, and unchecking a box re-disabled submit.
+
+**Where that leaves the goal.** Every Tier 2, 3, and 4 item that Option A can
+reach is now done, and Tier 1 is half done: components are reusable, typed, and
+stateful, but only where the tree is known at build time. What is left is the
+dynamic half of Tier 1 (a stateful component per row of runtime data, arbitrary
+logic, sharing domain code with the server), and that is the part this
+architecture cannot reach. It needs Option B.
 
 ## 1. What raven-web actually is today
 

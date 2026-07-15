@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.7.0"
+"github.com/martian56/raven-web" = "v0.8.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -30,7 +30,8 @@ Raven Web is tested with Raven 2.26.1 on Linux and Windows.
 - `app()` and `Ctx` give reusable components typed props and per-instance local
   state, so the same component can be used many times on one page.
 - `Signal` is a typed handle to client state; `Expr` computes over signals for
-  conditionals and derived text.
+  conditionals, derived text, and form validation. `bind_value` makes a field
+  controlled, and `disabled_when` gates a submit button on a rule.
 - `Behavior` is a typed, composable sequence of DOM effects attached directly to
   an element event. No handwritten JavaScript, no stringly-typed action names.
 - `Page` owns metadata, styles, client state, bindings, and output files.
@@ -137,9 +138,9 @@ Node.p().child_text("Nothing yet").visible_when(Expr.is_empty(Expr.of(rows)))
 ```
 
 Available: `of`, `text`, `int`, `flag`, `not`, `len`, `is_empty`, `eq`, `ne`,
-`gt`, `lt`, `and`, `or`, `add`, `sub`, `concat`, `ternary`. This is a DSL, not
-Raven: it has no arbitrary function calls, and it cannot share domain logic with
-your server code.
+`gt`, `lt`, `and`, `or`, `add`, `sub`, `concat`, `matches`, `ternary`. This is a
+DSL, not Raven: it has no arbitrary function calls, and it cannot share domain
+logic with your server code.
 
 ## Components
 
@@ -173,6 +174,34 @@ Components are expanded while the tree is built, so a stateful component cannot
 yet be repeated per row of a runtime-fetched list. List rows stay `{{field}}`
 templates. See [docs/FRONTEND-GAP-ANALYSIS.md](docs/FRONTEND-GAP-ANALYSIS.md)
 for why, and what it would take to lift it.
+
+## Forms
+
+`bind_value` makes a field controlled: the signal *is* the value, so typing
+writes it and writing it updates the field. Validation is then just an `Expr`
+over that signal, and `disabled_when` keeps submit off until the form is valid.
+
+```rust
+let email = signal("email", "")
+let touched = signal("touched", "")
+let bad = Expr.not(Expr.matches(Expr.of(email), "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"))
+
+Node.input_field("Email").bind_value(email).on_blur(Behavior.new().set(touched, "1"))
+// an error that waits until the field has been left
+Node.p().child_text("Enter a valid email.").visible_when(Expr.and(Expr.of(touched), bad))
+Node.submit_button("Save").disabled_when(bad)
+```
+
+- A checkbox or radio models as `"1"` or `""`, so it reads as truthy state.
+- `Expr.matches(value, pattern)` compiles the pattern as a `RegExp`. The pattern
+  is authored, never taken from user input, and is data rather than code: still
+  nothing is `eval`'d. An invalid pattern matches nothing instead of throwing.
+- Dirty/touched tracking needs no primitive: set a signal on blur, as above.
+- Only a whole signal can be modelled. A field path (`auth.at("token")`) is a
+  read-only view, so `bind_value` refuses it rather than silently failing to
+  write; `try_bind_value` reports it.
+
+See `examples/form.rv` for a signup form with cross-field rules.
 
 ## Client router
 
@@ -276,6 +305,8 @@ than string-injected script.
   reconciliation, and expressions (pluralized text, an empty state).
 - `examples/router.rv`: client routing with params, a guard, a fallback, and
   state surviving navigation.
+- `examples/form.rv`: a validated signup form with controlled fields,
+  cross-field rules, and errors that wait until a field is left.
 - `examples/dev.rv`: the build, watch, and serve dev loop.
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).

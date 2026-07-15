@@ -1,0 +1,81 @@
+// A validated form: controlled fields, live rules, per-field errors that wait
+// until you leave the field, and a submit button that stays off until the whole
+// form is valid.
+//
+// Every rule below is an Expr over the field's own signal, so validation is
+// data the runtime evaluates. Note what is absent: no CSS selector, no state
+// string, no JavaScript.
+
+import std/io { println }
+import "../lib" { Behavior, Ctx, Expr, Node, Page, Signal, Stylesheet, app }
+
+// Shown once the field has been left and its rule is broken, so an untouched
+// form is not a wall of red.
+fun error_text(message: String, touched: Signal, broken: Expr) -> Node {
+    return Node.p().class_name("err").child_text(message).visible_when(
+        Expr.and(Expr.of(touched), broken),
+    )
+}
+
+// A labelled, controlled text field that reports one rule.
+fun field(ctx: Ctx, label: String, value: Signal, message: String, broken: Expr) -> Node {
+    let touched = ctx.local("touched", "")
+    return Node.div().class_name("field").child(Node.label().child_text(label)).child(
+        Node.input_field(label).class_name("input").bind_value(value).on_blur(
+            Behavior.new().set(touched, "1"),
+        ),
+    ).child(error_text(message, touched, broken))
+}
+
+fun styles() -> Stylesheet {
+    return Stylesheet.new().raw(
+        "body{font-family:system-ui,sans-serif;max-width:26rem;margin:0 auto;padding:2rem;color:#0f172a}h1{font-size:1.5rem}.field{margin-bottom:1rem;display:flex;flex-direction:column;gap:.25rem}label{font-weight:600;font-size:.875rem}.input{padding:.5rem;border:1px solid #cbd5e1;border-radius:.375rem;font:inherit}.err{color:#dc2626;font-size:.8rem;margin:0}button{width:100%;padding:.6rem;border:0;border-radius:.375rem;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}button:disabled{background:#94a3b8;cursor:not-allowed}.ok{color:#059669;font-weight:600}",
+    )
+}
+
+fun build() -> Page {
+    let ui = app()
+    let email = ui.local("email", "")
+    let password = ui.local("password", "")
+    let confirm = ui.local("confirm", "")
+    let accepted = ui.local("accepted", "")
+    let saved = ui.local("saved", "")
+
+    // The rules. Each is an expression over the fields, so it re-evaluates on
+    // every keystroke and nothing has to be wired by hand.
+    let bad_email = Expr.not(Expr.matches(Expr.of(email), "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"))
+    let short_password = Expr.lt(Expr.len(Expr.of(password)), Expr.int(8))
+    let mismatch = Expr.ne(Expr.of(confirm), Expr.of(password))
+    let invalid = Expr.or(
+        Expr.or(bad_email, short_password),
+        Expr.or(mismatch, Expr.not(Expr.of(accepted))),
+    )
+
+    let form = Node.form().on_submit(Behavior.new().prevent_default().set(saved, "1")).child(
+        field(ui.instance(), "Email", email, "Enter a valid email address.", bad_email),
+    ).child(field(ui.instance(), "Password", password, "At least 8 characters.", short_password)).child(
+        field(ui.instance(), "Confirm password", confirm, "Passwords do not match.", mismatch),
+    ).child(
+        Node.div().class_name("field").child(
+            Node.label().child(Node.checkbox().class_name("terms").bind_value(accepted)).child(
+                Node.span().child_text(" I accept the terms"),
+            ),
+        ),
+    ).child(
+        // Off until every rule passes.
+        Node.submit_button("Create account").class_name("submit").disabled_when(invalid),
+    )
+
+    let body = Node.main_node().child(Node.h1().child_text("Create account")).child(form).child(
+        Node.p().class_name("ok").child_text("Account created.").visible_when(Expr.of(saved)),
+    )
+
+    return ui.page("form", body).with_styles(styles())
+}
+
+fun main() {
+    match build().write_static("dist-form") {
+        Ok(out) -> println("form: wrote ${out.file_count()} files"),
+        Err(error) -> println(error.message()),
+    }
+}

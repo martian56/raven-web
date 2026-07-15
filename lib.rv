@@ -122,6 +122,7 @@ enum Expr {
     Add(Expr, Expr),
     Sub(Expr, Expr),
     Concat(Expr, Expr),
+    Matches(Expr, String),
     Ternary(Expr, Expr, Expr),
 }
 
@@ -160,6 +161,12 @@ impl Expr {
 
     fun concat(left: Expr, right: Expr) -> Expr = Expr.Concat(left, right)
 
+    // True when the value matches the regular expression. The pattern is
+    // authored, never taken from user input, and is compiled by the runtime as
+    // a RegExp: it is data, not code, so nothing is eval'd. An invalid pattern
+    // matches nothing rather than throwing.
+    fun matches(value: Expr, pattern: String) -> Expr = Expr.Matches(value, pattern)
+
     fun ternary(cond: Expr, then_value: Expr, else_value: Expr) -> Expr {
         return Expr.Ternary(cond, then_value, else_value)
     }
@@ -192,6 +199,9 @@ fun _serialize_expr(e: Expr) -> String {
         Add(left, right) -> _expr2("add", left, right),
         Sub(left, right) -> _expr2("sub", left, right),
         Concat(left, right) -> _expr2("cat", left, right),
+        Matches(value, pattern) -> "[".concat(_js_string("re")).concat(",").concat(
+            _serialize_expr(value),
+        ).concat(",").concat(_js_string(pattern)).concat("]"),
         Ternary(cond, a, b) -> "[".concat(_js_string("if")).concat(",").concat(
             _serialize_expr(cond),
         ).concat(",").concat(_serialize_expr(a)).concat(",").concat(_serialize_expr(b)).concat("]"),
@@ -224,6 +234,7 @@ fun _expr_keys(e: Expr, out: List<String>) {
         Not(inner) -> _expr_keys(inner, out),
         Len(inner) -> _expr_keys(inner, out),
         IsEmpty(inner) -> _expr_keys(inner, out),
+        Matches(value, _) -> _expr_keys(value, out),
         Eq(left, right) -> {
             _expr_keys(left, out)
             _expr_keys(right, out)
@@ -883,6 +894,34 @@ impl Node {
     // the signal is a value the compiler checks, not a string it cannot see.
     fun text_of(self, source: Signal) -> Node {
         self.binds.push(_node_bind("text", source.path, ""))
+        return self
+    }
+
+    // A controlled field: the signal is the value. Typing writes the signal and
+    // writing the signal updates the field, so validation is just an Expr over
+    // it. A checkbox models as "1" or "".
+    //
+    // Only a whole signal can be modelled. A field path (auth.at("token")) is a
+    // read-only view, so it is rejected rather than silently failing to write.
+    fun bind_value(self, source: Signal) -> Node {
+        if source.key != source.path {
+            return self
+        }
+        self.binds.push(_node_bind("value", source.path, ""))
+        return self.attr("data-rw-model", source.key)
+    }
+
+    fun try_bind_value(self, source: Signal) -> Result<Node, String> {
+        if source.key != source.path {
+            return Err("cannot model a field path: ".concat(source.path))
+        }
+        return Ok(self.bind_value(source))
+    }
+
+    // Disable the control while the expression is true, so a submit button can
+    // turn itself off until the form is valid.
+    fun disabled_when(self, cond: Expr) -> Node {
+        self.binds.push(_node_bind_expr("disabled", cond, ""))
         return self
     }
 
@@ -1740,7 +1779,7 @@ fun _render_runtime() -> String {
         "function rw_get(path){var parts=String(path).split('.');var cur=rw_state;for(var i=0;i<parts.length;i++){if(cur===null||cur===undefined){return undefined;}cur=cur[parts[i]];}return cur;}",
     )
     out = out.concat(
-        "function rw_num(v){var n=Number(v);return isNaN(n)?0:n;}function rw_size(v){if(v===undefined||v===null){return 0;}if(v.length!==undefined){return v.length;}if(typeof v==='object'){return Object.keys(v).length;}return String(v).length;}function rw_eval(e){if(!e){return undefined;}var k=e[0];if(k==='sig'){return rw_get(e[1]);}if(k==='str'){return e[1];}if(k==='num'){return e[1];}if(k==='bool'){return e[1];}if(k==='not'){return !rw_truthy(rw_eval(e[1]));}if(k==='len'){return rw_size(rw_eval(e[1]));}if(k==='empty'){return rw_size(rw_eval(e[1]))===0;}if(k==='eq'){return String(rw_eval(e[1]))===String(rw_eval(e[2]));}if(k==='ne'){return String(rw_eval(e[1]))!==String(rw_eval(e[2]));}if(k==='gt'){return rw_num(rw_eval(e[1]))>rw_num(rw_eval(e[2]));}if(k==='lt'){return rw_num(rw_eval(e[1]))<rw_num(rw_eval(e[2]));}if(k==='and'){return rw_truthy(rw_eval(e[1]))&&rw_truthy(rw_eval(e[2]));}if(k==='or'){return rw_truthy(rw_eval(e[1]))||rw_truthy(rw_eval(e[2]));}if(k==='add'){return rw_num(rw_eval(e[1]))+rw_num(rw_eval(e[2]));}if(k==='sub'){return rw_num(rw_eval(e[1]))-rw_num(rw_eval(e[2]));}if(k==='cat'){var l=rw_eval(e[1]);var r=rw_eval(e[2]);return (l===undefined||l===null?'':String(l))+(r===undefined||r===null?'':String(r));}if(k==='if'){return rw_truthy(rw_eval(e[1]))?rw_eval(e[2]):rw_eval(e[3]);}return undefined;}",
+        "function rw_num(v){var n=Number(v);return isNaN(n)?0:n;}function rw_size(v){if(v===undefined||v===null){return 0;}if(v.length!==undefined){return v.length;}if(typeof v==='object'){return Object.keys(v).length;}return String(v).length;}function rw_eval(e){if(!e){return undefined;}var k=e[0];if(k==='sig'){return rw_get(e[1]);}if(k==='str'){return e[1];}if(k==='num'){return e[1];}if(k==='bool'){return e[1];}if(k==='not'){return !rw_truthy(rw_eval(e[1]));}if(k==='len'){return rw_size(rw_eval(e[1]));}if(k==='empty'){return rw_size(rw_eval(e[1]))===0;}if(k==='eq'){return String(rw_eval(e[1]))===String(rw_eval(e[2]));}if(k==='ne'){return String(rw_eval(e[1]))!==String(rw_eval(e[2]));}if(k==='gt'){return rw_num(rw_eval(e[1]))>rw_num(rw_eval(e[2]));}if(k==='lt'){return rw_num(rw_eval(e[1]))<rw_num(rw_eval(e[2]));}if(k==='and'){return rw_truthy(rw_eval(e[1]))&&rw_truthy(rw_eval(e[2]));}if(k==='or'){return rw_truthy(rw_eval(e[1]))||rw_truthy(rw_eval(e[2]));}if(k==='add'){return rw_num(rw_eval(e[1]))+rw_num(rw_eval(e[2]));}if(k==='sub'){return rw_num(rw_eval(e[1]))-rw_num(rw_eval(e[2]));}if(k==='cat'){var l=rw_eval(e[1]);var r=rw_eval(e[2]);return (l===undefined||l===null?'':String(l))+(r===undefined||r===null?'':String(r));}if(k==='if'){return rw_truthy(rw_eval(e[1]))?rw_eval(e[2]):rw_eval(e[3]);}if(k==='re'){var s=rw_eval(e[1]);s=s===undefined||s===null?'':String(s);try{return new RegExp(e[2]).test(s);}catch(err){return false;}}return undefined;}",
     )
     out = out.concat(
         "function rw_persist(key){if(rw_keep.indexOf(key)<0){return;}try{var v=rw_state[key];if(v===undefined||v===null){localStorage.removeItem('rw:'+key);}else{localStorage.setItem('rw:'+key,JSON.stringify(v));}}catch(e){}}",
@@ -1788,6 +1827,14 @@ fun _render_runtime() -> String {
     )
     out = out.concat("else if(kind==='visible'){rw_vis(el,rw_truthy(val));}")
     out = out.concat("else if(kind==='hidden'){rw_vis(el,!rw_truthy(val));}")
+    out = out.concat("else if(kind==='disabled'){el.disabled=rw_truthy(val);}")
+    // Writing a field the visitor is typing in would move the caret, so only
+    // write when the value actually differs.
+    out = out.concat("else if(kind==='value'){")
+    out = out.concat("if(el.type==='checkbox'||el.type==='radio'){el.checked=rw_truthy(val);}")
+    out = out.concat(
+        "else{var v=val===undefined||val===null?'':String(val);if(el.value!==v){el.value=v;}}}",
+    )
     out = out.concat("}}")
     out = out.concat("function rw_apply(){for(var i=0;i<rw_binds.length;i++){rw_apply_one(i);}}")
     out = out.concat(
@@ -1879,6 +1926,17 @@ fun _render_runtime() -> String {
     out = out.concat(
         "for(var j=0;j<rw_events.length;j++){(function(name){document.addEventListener(name,function(ev){rw_dispatch(ev,name);},true);})(rw_events[j]);}",
     )
+    // A modelled field writes its signal as the visitor types. A checkbox
+    // stores "1" or "", so it reads as truthy or falsy like any other state.
+    out = out.concat("function rw_model(ev){var el=ev.target;")
+    out = out.concat("if(!el||!el.getAttribute){return;}var k=el.getAttribute('data-rw-model');")
+    out = out.concat("if(!k){return;}")
+    out = out.concat(
+        "if(el.type==='checkbox'||el.type==='radio'){rw_setstate(k,el.checked?'1':'');}",
+    )
+    out = out.concat("else{rw_setstate(k,rw_val(el));}}")
+    out = out.concat("document.addEventListener('input',rw_model,true);")
+    out = out.concat("document.addEventListener('change',rw_model,true);")
     // Intercept a plain left click on a route link only: a modified click or a
     // middle click must keep the browser's own behaviour (new tab, download).
     out = out.concat("document.addEventListener('click',function(ev){")
