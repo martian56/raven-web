@@ -1,5 +1,7 @@
 # raven-web
 
+[![CI](https://github.com/martian56/raven-web/actions/workflows/ci.yml/badge.svg)](https://github.com/martian56/raven-web/actions/workflows/ci.yml)
+
 raven-web is a static-first frontend library for Raven where you never write
 JavaScript. Build components from structs and impl blocks, describe interactions
 as typed values, and emit a deployable directory of HTML, CSS, JavaScript, and
@@ -8,6 +10,17 @@ never accepts a raw JS string.
 
 It stays browser-framework-agnostic. Tailwind, UnoCSS, handwritten CSS, a
 design-system bundle, or a raven-web `Theme` are all just CSS.
+
+## Install
+
+Add the latest release to `rv.toml`:
+
+```toml
+[dependencies]
+"github.com/martian56/raven-web" = "v0.3.0"
+```
+
+Raven Web is tested with Raven 2.26.1 on Linux and Windows.
 
 ## The developer model
 
@@ -26,7 +39,7 @@ Builders are infallible and silently reject unsafe input (an invalid tag, URL,
 attribute, or selector is dropped). Each has a `try_*` twin that returns a
 `Result` when you want the rejection signalled.
 
-~~~raven
+```rust
 import "github.com/martian56/raven-web" { Behavior, Component, Node, Page, Stylesheet }
 
 struct Hero {
@@ -56,7 +69,7 @@ fun main() {
         Err(e) -> print(e.message()),
     }
 }
-~~~
+```
 
 `Page.new` takes a `Node` explicitly; pass `MyComponent { ... }.to_node()` at the
 package boundary.
@@ -66,13 +79,13 @@ package boundary.
 Attach a `Behavior` to an element event. raven-web serializes it into a data
 attribute and interprets it with a fixed, audited runtime it generates for you.
 
-~~~raven
+```rust
 let form = Node.form().on_submit(
     Behavior.new().prevent_default().set_value("#title", "").add_class("#title", "is-saved").focus(
         "#title",
     ),
 ).child(Node.input_field("Title").id("title")).child(Node.submit_button("Save"))
-~~~
+```
 
 Events: click, input, change, submit, keydown, keyup, focus, blur, mouseenter,
 mouseleave, scroll. Effects: set text/value/attribute, add/remove/toggle class,
@@ -84,11 +97,11 @@ copy-value, copy-to-clipboard, and the client-state effects below.
 Declare page-level state, mutate it from behaviors, and bind it to the DOM. This
 covers counters, tabs, toggles, and theme switches with no author JavaScript.
 
-~~~raven
+```rust
 let page = Page.new("Counter", ui).state("n", "0").bind_text("#count", "n")
 // a button that increments:
 Node.button("+").on_click(Behavior.new().increment_state("n", 1))
-~~~
+```
 
 Bindings: `bind_text`, `bind_class`, `bind_attr`, `bind_visible`. State effects:
 `set_state`, `toggle_state`, `increment_state`. The runtime applies bindings on
@@ -96,7 +109,7 @@ load and re-applies them after every state change.
 
 ## Multi-page sites
 
-~~~raven
+```rust
 import "github.com/martian56/raven-web" { Layout, Node, Site }
 
 let layout = Layout.new().header(Node.header().child_text("My site")).footer(
@@ -107,14 +120,14 @@ let site = Site.new("https://example.com").page("/", layout.wrap("Home", home_bo
     layout.wrap("About", about_body),
 )
 site.write_static("dist")
-~~~
+```
 
 Each route becomes a clean-URL directory (`/about` to `about/index.html`).
 `write_static` also emits `sitemap.xml` and `404.html`.
 
 ## Design tokens and themes
 
-~~~raven
+```rust
 import "github.com/martian56/raven-web" { Theme }
 
 let theme = Theme.new().color("bg", "#ffffff", "#0b1020").color("fg", "#111111", "#e6edf6").scale(
@@ -122,7 +135,7 @@ let theme = Theme.new().color("bg", "#ffffff", "#0b1020").color("fg", "#111111",
     "1rem",
 )
 page.with_styles(theme.stylesheet())
-~~~
+```
 
 Tokens are emitted as CSS custom properties (`var(--color-bg)`). Dark values
 apply under `prefers-color-scheme` and under an explicit `data-theme` attribute,
@@ -130,7 +143,7 @@ which a `Behavior` can set for a manual toggle.
 
 ## Dev server with live reload
 
-~~~raven
+```rust
 import "github.com/martian56/raven-web/dev" { reloader, serve, watch }
 
 fun main() {
@@ -141,7 +154,7 @@ fun main() {
     })
     serve("dist", 8080, state)
 }
-~~~
+```
 
 `serve` hosts the built directory and injects a live-reload client (generated,
 never handwritten). `watch` rebuilds on source change and refreshes the browser.
@@ -164,14 +177,14 @@ than string-injected script.
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).
 
-~~~text
+```text
 raven build examples/landing.rv -o landing.exe
 ./landing.exe
-~~~
+```
 
 ## Checks
 
-~~~text
+```text
 rvpm fmt --check
 rvpm test
-~~~
+```
