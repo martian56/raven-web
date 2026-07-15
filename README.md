@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.9.0"
+"github.com/martian56/raven-web" = "v0.10.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -142,6 +142,17 @@ Page.new("Board", body).signal(tasks)
 It stays live state: behaviors can clear or replace it, and `fetch` can refill
 it later. `Page.data(key, json)` does the same for a key you address directly,
 and `ctx.local_of` gives a component structured local state.
+
+## Performance
+
+The runtime is a fixed ~3.6 KB gzipped whatever the page does, and the HTML is
+complete at build time, so content never waits on JavaScript. The dependency
+graph is resolved at build time, so a write wakes only the bindings that read
+that key: on a page with 401 bindings and a 500 row list, clicking one counter
+re-applies 2 bindings, scans the document 0 times, and touches no rows.
+
+Measured, with the method and the caveats, in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Safety, and what is enforced
 
@@ -361,6 +372,8 @@ than string-injected script.
   cross-field rules, and errors that wait until a field is left.
 - `examples/typed_data.rv`: a typed `List<Task>` rendered on first paint with no
   request.
+- `examples/bench.rv`: the page the performance numbers are measured on (200
+  component instances plus a 500 row list).
 - `examples/dev.rv`: the build, watch, and serve dev loop.
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).

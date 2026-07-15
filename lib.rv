@@ -1874,10 +1874,19 @@ fun _render_runtime() -> String {
         "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];var rw_deps=rw_init.d||{};",
     )
     out = out.concat(
-        "function rw_find(s){try{return document.querySelector(s);}catch(e){console.error('raven-web: bad selector',s);return null;}}",
+        // raven-web's own marks are unique and live as long as the page, so
+        // resolving one is worth caching: without it every binding rescans the
+        // whole document on every write it takes part in. An author's selector
+        // is not cached, because it may match rows a list rebuilds.
+        // Two caches, not one: rw_find stores an element and rw_all stores a
+        // node list, so sharing a key would hand back the wrong shape.
+        "var rw_c1={},rw_cn={};function rw_mark(s){return s.indexOf('[data-rw-b=')===0;}",
     )
     out = out.concat(
-        "function rw_all(s){try{return document.querySelectorAll(s);}catch(e){console.error('raven-web: bad selector',s);return [];}}",
+        "function rw_find(s){if(rw_c1[s]!==undefined){return rw_c1[s];}try{var el=document.querySelector(s);if(rw_mark(s)){rw_c1[s]=el;}return el;}catch(e){console.error('raven-web: bad selector',s);return null;}}",
+    )
+    out = out.concat(
+        "function rw_all(s){if(rw_cn[s]!==undefined){return rw_cn[s];}try{var found=document.querySelectorAll(s);if(rw_mark(s)){rw_cn[s]=found;}return found;}catch(e){console.error('raven-web: bad selector',s);return [];}}",
     )
     out = out.concat("function rw_vis(el,on){if(el){el.style.display=on?'':'none';}}")
     out = out.concat("function rw_val(el){return el.value!==undefined?el.value:el.textContent;}")

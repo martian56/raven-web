@@ -1,0 +1,60 @@
+// Generates a deliberately heavy page: many independent bindings plus a long
+// list, so the cost of one state write can be measured against a realistic
+// worst case rather than a toy.
+import std/io { println }
+import std/json { ToJson }
+import "../lib" { Behavior, Expr, Node, Page, app, signal, signal_of }
+
+@derive(ToJson)
+struct Row {
+    id: Int,
+    title: String,
+}
+
+fun rows(n: Int) -> List<Row> {
+    let out: List<Row> = []
+    let i = 0
+    while i < n {
+        out.push(Row { id: i, title: "Row ".concat(i.to_string()) })
+        i += 1
+    }
+    return out
+}
+
+fun row_template() -> Node {
+    return Node.li().class_name("row").child(Node.span().child_text("{{title}}"))
+}
+
+fun main() {
+    let ui = app()
+    let body = Node.main_node()
+
+    // 200 independent counters: 400 bindings that have nothing to do with the
+    // one we will write to.
+    let i = 0
+    while i < 200 {
+        let ctx = ui.instance()
+        let n = ctx.local("n", "0")
+        let _ = body.child(
+            Node.div().child(Node.span().text_of(n)).child(
+                Node.span().child_text("hot").visible_when(Expr.gt(Expr.of(n), Expr.int(0))),
+            ).child(Node.button("+").class_name("inc").on_click(Behavior.new().increment(n, 1))),
+        )
+        i += 1
+    }
+
+    // A 500 row list.
+    let data = signal_of("rows", rows(500).to_json())
+    let _ = body.child(Node.ul().class_name("rows").each_of(data, row_template()))
+    let _ = body.child(
+        Node.button("touch").class_name("touch").on_click(
+            Behavior.new().increment(signal("spare", "0"), 1),
+        ),
+    )
+
+    let page = ui.page("bench", body).signal(data).signal(signal("spare", "0"))
+    match page.write_static("dist-bench") {
+        Ok(out) -> println("bench: wrote ${out.file_count()} files"),
+        Err(error) -> println(error.message()),
+    }
+}
