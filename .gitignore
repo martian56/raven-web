@@ -7,5 +7,6 @@
 *.bak
 workspace.css
 
-# probe output
+# example output
 dist-probe/
+dist-components/

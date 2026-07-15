@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.3.0"
+"github.com/martian56/raven-web" = "v0.6.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -26,7 +26,11 @@ Raven Web is tested with Raven 2.26.1 on Linux and Windows.
 
 - `Node` is the fluent, XSS-safe HTML builder. Composition helpers `child_each`,
   `child_when`, `each`, and `when` build lists and conditional structure inline.
-- `Component` lets a Raven struct expose `to_node()`.
+- `Component` lets a Raven struct expose `to_node()` for a stateless view.
+- `app()` and `Ctx` give reusable components typed props and per-instance local
+  state, so the same component can be used many times on one page.
+- `Signal` is a typed handle to client state; `Expr` computes over signals for
+  conditionals and derived text.
 - `Behavior` is a typed, composable sequence of DOM effects attached directly to
   an element event. No handwritten JavaScript, no stringly-typed action names.
 - `Page` owns metadata, styles, client state, bindings, and output files.
@@ -94,18 +98,80 @@ copy-value, copy-to-clipboard, and the client-state effects below.
 
 ## Client state and bindings
 
-Declare page-level state, mutate it from behaviors, and bind it to the DOM. This
-covers counters, tabs, toggles, and theme switches with no author JavaScript.
+State is a typed `Signal`. Declare it once, then pass the handle around: nodes
+bind to it and behaviors write to it. No selector and no state string is written
+by hand, so a typo is a compile error instead of a silent no-op.
 
 ```rust
-let page = Page.new("Counter", ui).state("n", "0").bind_text("#count", "n")
-// a button that increments:
-Node.button("+").on_click(Behavior.new().increment_state("n", 1))
+let n = signal("n", "0")
+
+let ui = Node.div().child(Node.span().text_of(n)).child(
+    Node.button("+").on_click(Behavior.new().increment(n, 1)),
+)
+let page = Page.new("Counter", ui).signal(n)
 ```
 
-Bindings: `bind_text`, `bind_class`, `bind_attr`, `bind_visible`. State effects:
-`set_state`, `toggle_state`, `increment_state`. The runtime applies bindings on
-load and re-applies them after every state change.
+Node bindings: `text_of`, `class_of`, `attr_of`, `visible_if`, `hidden_if`,
+`each_of`, `each_where`. Behavior writes: `set`, `toggle`, `increment`, `clear`.
+raven-web resolves the dependency graph at build time, so a write updates only
+the bindings that read that signal, and lists reconcile by key rather than being
+rebuilt (an input inside a row keeps its value and focus).
+
+## Expressions
+
+`Expr` computes over signals, so a view can express a condition or derived text
+without JavaScript. It evaluates as data; nothing is ever `eval`'d.
+
+```rust
+// "1 row" vs "N rows"
+Node.span().text_expr(
+    Expr.ternary(
+        Expr.eq(Expr.len(Expr.of(rows)), Expr.int(1)),
+        Expr.text("1 row"),
+        Expr.concat(Expr.len(Expr.of(rows)), Expr.text(" rows")),
+    ),
+)
+// an empty state
+Node.p().child_text("Nothing yet").visible_when(Expr.is_empty(Expr.of(rows)))
+```
+
+Available: `of`, `text`, `int`, `flag`, `not`, `len`, `is_empty`, `eq`, `ne`,
+`gt`, `lt`, `and`, `or`, `add`, `sub`, `concat`, `ternary`. This is a DSL, not
+Raven: it has no arbitrary function calls, and it cannot share domain logic with
+your server code.
+
+## Components
+
+A component is an ordinary Raven function: its props are typed parameters, so
+the compiler checks every use. `ctx.local` gives an instance private state
+without inventing a global key, so one component can be reused on a page and
+each copy behaves independently.
+
+```rust
+fun counter(ctx: Ctx, label: String, step: Int) -> Node {
+    let n = ctx.local("n", "0")
+    return Node.div().child(Node.span().child_text(label)).child(
+        Node.span().text_of(n),
+    ).child(Node.button("+").on_click(Behavior.new().increment(n, step)))
+}
+
+fun build() -> Page {
+    let ui = app()
+    let view = Node.div().child(counter(ui.instance(), "clicks", 1)).child(
+        counter(ui.instance(), "by five", 5),
+    )
+    return ui.page("Counters", view)   // registers every local that was declared
+}
+```
+
+Call `ui.instance()` once per instance; components nest by passing
+`ctx.instance()` to a child. Two components handed the *same* `Ctx` share its
+state deliberately, which is how a parent hands a child a signal it owns.
+
+Components are expanded while the tree is built, so a stateful component cannot
+yet be repeated per row of a runtime-fetched list. List rows stay `{{field}}`
+templates. See [docs/FRONTEND-GAP-ANALYSIS.md](docs/FRONTEND-GAP-ANALYSIS.md)
+for why, and what it would take to lift it.
 
 ## Multi-page sites
 
@@ -173,6 +239,10 @@ than string-injected script.
 
 - `examples/landing.rv`: a self-contained 2.0 showcase (components, composition,
   inline behaviors, expanded effects).
+- `examples/components.rv`: reusable components with typed props and
+  per-instance local state, nested two deep.
+- `examples/reactive.rv`: typed signals, targeted updates, keyed list
+  reconciliation, and expressions (pluralized text, an empty state).
 - `examples/dev.rv`: the build, watch, and serve dev loop.
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).

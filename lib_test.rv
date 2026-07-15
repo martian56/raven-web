@@ -1,6 +1,6 @@
 import std/fs { exists, read }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, CssRule, Expr, Layout, Node, Page, Signal, Site, StaticFile, Stylesheet, Theme, request, signal }
+import "./lib" { Behavior, Ctx, CssRule, Expr, Layout, Node, Page, Signal, Site, StaticFile, Stylesheet, Theme, app, request, signal }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -442,6 +442,65 @@ fun test_static_files_are_written_safely() {
         Ok(_) -> assert_true(false),
         Err(_) -> assert_true(true),
     }
+}
+
+// A component: props are typed parameters, so the compiler checks the call.
+// It declares local state without naming a global key.
+fun disclosure(ctx: Ctx, label: String) -> Node {
+    let open = ctx.local("open", "")
+    return Node.div().class_name("disclosure").child(
+        Node.button(label).on_click(Behavior.new().toggle(open)),
+    ).child(Node.p().child_text(label.concat(" body")).visible_if(open))
+}
+
+fun test_a_component_used_twice_gets_independent_state() {
+    let ui = app()
+    let view = Node.div().child(disclosure(ui.instance(), "First")).child(
+        disclosure(ui.instance(), "Second"),
+    )
+    let page = ui.page("Components", view)
+
+    // Two instances of one component, so two distinct state keys exist without
+    // the author having written either one.
+    let js = page.js()
+    assert_true(js.contains("c0_open"))
+    assert_true(js.contains("c1_open"))
+
+    // Each instance's bindings and behaviors address only its own key, so
+    // opening the first cannot move the second.
+    let first_only = 0
+    let second_only = 0
+    for binding in page.all_bindings() {
+        if binding.key == "c0_open" {
+            first_only = first_only + 1
+        }
+        if binding.key == "c1_open" {
+            second_only = second_only + 1
+        }
+    }
+    assert_true(first_only == 1)
+    assert_true(second_only == 1)
+
+    // The dependency graph keeps them apart: a write to one wakes one binding.
+    assert_true(js.contains("\"c0_open\""))
+    assert_true(js.contains("\"c1_open\""))
+}
+
+fun test_components_nest_and_props_reach_the_markup() {
+    let ui = app()
+    let outer = ui.instance()
+    let panel = Node.section().child(disclosure(outer.instance(), "Inner")).child(
+        disclosure(outer.instance(), "Sibling"),
+    )
+    let page = ui.page("Nested", panel)
+    let html = page.html()
+
+    // Props render, and a component nested inside another still gets its own
+    // scope rather than colliding with its parent's.
+    assert_true(html.contains("Inner body"))
+    assert_true(html.contains("Sibling body"))
+    assert_true(page.js().contains("c1_open"))
+    assert_true(page.js().contains("c2_open"))
 }
 
 fun test_semantic_constructors_render() {

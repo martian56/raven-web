@@ -24,7 +24,16 @@ Option A (grow the library, no compiler change) is the chosen path. Status:
   `ternary`, so an empty state and singular/plural text are now expressible. It
   is a DSL, not Raven: no arbitrary functions, no sharing domain logic with the
   server. That limit is structural and only Option B removes it.
-- **Tier 1.1/1.3 (client components), Tier 4 (router, forms): still open.**
+- **Tier 1.1/1.3 (client components): partly fixed in v0.6.0.** A component is a
+  Raven function whose props are typed parameters, and `Ctx.local` gives each
+  instance private state, so a component is reusable, nestable, and independent
+  of its siblings. Verified by driving the emitted page in a real DOM: three
+  accordions, four counters, and two cards each held their own state under
+  clicks. What remains unfixed is the dynamic half: instances are allocated
+  while the tree is built, so a stateful component still cannot be repeated per
+  row of a runtime-fetched list, and rows stay `{{field}}` templates. That half
+  needs Option B.
+- **Tier 4 (router, forms): still open.**
 
 ## 1. What raven-web actually is today
 

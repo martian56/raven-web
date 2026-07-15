@@ -31,6 +31,75 @@ impl Signal {
     }
 }
 
+// Component scoping.
+//
+// A component is an ordinary Raven function that takes its props as typed
+// parameters and a Ctx, and returns a Node. Its props are therefore checked by
+// the compiler like any other call. `Ctx.local` gives the instance its own
+// state: raven-web allocates a scope id per instance at build time and
+// namespaces the key, so the same component used twice has two independent
+// pieces of state without the author naming either.
+//
+//   fun counter(ctx: Ctx, label: String) -> Node {
+//       let n = ctx.local("n", "0")
+//       return Node.div().child(Node.span().text_of(n)).child(
+//           Node.button("+").on_click(Behavior.new().increment(n, 1)))
+//   }
+//
+//   let ui = app()
+//   let view = Node.div().child(counter(ui.instance(), "A")).child(counter(ui.instance(), "B"))
+//   return ui.page("Counters", view)
+//
+// Call `instance()` once per component instance. Two components handed the same
+// Ctx deliberately share its state; that is how a parent hands a child a signal
+// it already owns.
+//
+// Instances are allocated while the tree is built, so a component is expanded at
+// build time. A stateful component cannot yet be repeated per item of a
+// runtime-fetched list; list rows remain {{field}} templates.
+struct Scope {
+    states: List<StatePair>,
+    next: Int,
+}
+
+struct Ctx {
+    scope: Scope,
+    id: String,
+}
+
+// The root scope for a page.
+fun app() -> Ctx {
+    let states: List<StatePair> = []
+    return Ctx { scope: Scope { states, next: 0 }, id: "r" }
+}
+
+impl Ctx {
+    // A fresh instance scope. Call once per component instance, including for
+    // components nested inside another component.
+    fun instance(self) -> Ctx {
+        let id = "c".concat(self.scope.next.to_string())
+        self.scope.next = self.scope.next + 1
+        return Ctx { scope: self.scope, id }
+    }
+
+    // State private to this instance. The returned Signal is used exactly like a
+    // global one; only its key is scoped.
+    fun local(self, name: String, initial: String) -> Signal {
+        let key = self.id.concat("_").concat(name)
+        self.scope.states.push(StatePair { key, value: initial })
+        return signal(key, initial)
+    }
+
+    // Build the page, registering every local declared during the tree build.
+    fun page(self, title: String, view: Node) -> Page {
+        let page = Page.new(title, view)
+        for pair in self.scope.states {
+            let _ = page.state(pair.key, pair.value)
+        }
+        return page
+    }
+}
+
 // A computed expression over signals. Raven has no operator overloading, so the
 // DSL is function calls: Expr.gt(Expr.len(tasks), Expr.num(0)). It compiles to a
 // small data tree that the runtime evaluates; nothing is ever eval'd, so the CSP
