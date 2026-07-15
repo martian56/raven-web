@@ -6,7 +6,7 @@
 // writes JavaScript for it either.
 
 import std/http { Server, Request, Response }
-import std/fs { read, walk, exists, join }
+import std/fs { read, walk, exists, is_file, join }
 import std/time { sleep_millis }
 import std/io { println }
 
@@ -74,7 +74,9 @@ fun _serve_one(dir: String, endpoint: String, req: Request) -> Response {
     }
     return match resolve_path(dir, req.path) {
         Some(path) -> {
-            let target = if exists(path) {
+            // Test is_file, not exists: a clean URL like /app names a directory,
+            // which exists but must be served as its index.html.
+            let target = if is_file(path) {
                 path
             } else {
                 join(path, "index.html")
