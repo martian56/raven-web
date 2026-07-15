@@ -10,21 +10,32 @@ import std/io { println }
 import "../lib" { Behavior, Ctx, Expr, Node, Page, Signal, Stylesheet, app }
 
 // Shown once the field has been left and its rule is broken, so an untouched
-// form is not a wall of red.
-fun error_text(message: String, touched: Signal, broken: Expr) -> Node {
-    return Node.p().class_name("err").child_text(message).visible_when(
+// form is not a wall of red. role=alert means it is read out when it appears,
+// and the id is what the input points at.
+fun error_text(id: String, message: String, touched: Signal, broken: Expr) -> Node {
+    return Node.p().id(id).class_name("err").attr("role", "alert").child_text(message).visible_when(
         Expr.and(Expr.of(touched), broken),
     )
 }
 
 // A labelled, controlled text field that reports one rule.
+//
+// The parts that make it announce properly: the label is tied to the input by
+// id, aria-describedby points at the error text, and aria-invalid tracks the
+// rule. Without those a screen reader user gets a red message they never hear.
 fun field(ctx: Ctx, label: String, value: Signal, message: String, broken: Expr) -> Node {
     let touched = ctx.local("touched", "")
-    return Node.div().class_name("field").child(Node.label().child_text(label)).child(
-        Node.input_field(label).class_name("input").bind_value(value).on_blur(
-            Behavior.new().set(touched, "1"),
-        ),
-    ).child(error_text(message, touched, broken))
+    let input_id = ctx.id_for("input")
+    let error_id = ctx.id_for("error")
+    let showing = Expr.and(Expr.of(touched), broken)
+    return Node.div().class_name("field").child(
+        Node.label().attr("for", input_id).child_text(label),
+    ).child(
+        Node.input_field(label).id(input_id).class_name("input").attr("aria-describedby", error_id).aria_when(
+            showing,
+            "invalid",
+        ).bind_value(value).on_blur(Behavior.new().set(touched, "1")),
+    ).child(error_text(error_id, message, touched, broken))
 }
 
 fun styles() -> Stylesheet {

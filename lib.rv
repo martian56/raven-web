@@ -108,6 +108,17 @@ impl Ctx {
         return signal(key, initial)
     }
 
+    // A DOM id unique to this instance. Accessible markup has to point at
+    // elements by id (aria-controls, aria-describedby, label for), and a
+    // component used twice on a page cannot hard-code one without colliding.
+    //
+    //   let panel = ctx.id_for("panel")
+    //   Node.button(title).attr("aria-controls", panel).aria_if(open, "expanded")
+    //   Node.div().id(panel).visible_if(open)
+    fun id_for(self, name: String) -> String {
+        return self.id.concat("_").concat(name)
+    }
+
     // Instance state seeded with structured data, so a component can be handed
     // a typed value as its starting point.
     fun local_of(self, name: String, initial: JsonValue) -> Signal {
@@ -1048,6 +1059,30 @@ impl Node {
         return self
     }
 
+    // An ARIA state bound to a signal: aria_if(open, "expanded") keeps
+    // aria-expanded correct as `open` changes.
+    //
+    // This exists because attr_of is the wrong tool for it. ARIA states take
+    // exactly "true" or "false", while raven-web's truthiness is "1" and "", so
+    // attr_of(open, "aria-expanded") writes aria-expanded="1", which is invalid
+    // and leaves the control announcing as collapsed forever. Nothing errors,
+    // which is what makes it worth its own method.
+    fun aria_if(self, source: Signal, name: String) -> Node {
+        return self.aria_bind(_node_bind("aria", source.path, "aria-".concat(name)), name)
+    }
+
+    // The same, computed: aria_when(Expr.not(Expr.of(valid)), "invalid").
+    fun aria_when(self, cond: Expr, name: String) -> Node {
+        return self.aria_bind(_node_bind_expr("aria", cond, "aria-".concat(name)), name)
+    }
+
+    fun aria_bind(self, bind: NodeBind, name: String) -> Node {
+        if _valid_attr_name("aria-".concat(name)) {
+            self.binds.push(bind)
+        }
+        return self
+    }
+
     // Repeat `template` once per item of the array in `source`.
     fun each_of(self, source: Signal, template: Node) -> Node {
         self.binds.push(_node_bind("list", source.path, template.render()))
@@ -1880,7 +1915,7 @@ fun _render_runtime() -> String {
         // is not cached, because it may match rows a list rebuilds.
         // Two caches, not one: rw_find stores an element and rw_all stores a
         // node list, so sharing a key would hand back the wrong shape.
-        "var rw_c1={},rw_cn={};function rw_mark(s){return s.indexOf('[data-rw-b=')===0;}",
+        "var rw_c1={},rw_cn={},rw_booted=false,rw_seen=null;function rw_mark(s){return s.indexOf('[data-rw-b=')===0;}",
     )
     out = out.concat(
         "function rw_find(s){if(rw_c1[s]!==undefined){return rw_c1[s];}try{var el=document.querySelector(s);if(rw_mark(s)){rw_c1[s]=el;}return el;}catch(e){console.error('raven-web: bad selector',s);return null;}}",
@@ -1946,6 +1981,8 @@ fun _render_runtime() -> String {
     out = out.concat("else if(kind==='visible'){rw_vis(el,rw_truthy(val));}")
     out = out.concat("else if(kind==='hidden'){rw_vis(el,!rw_truthy(val));}")
     out = out.concat("else if(kind==='disabled'){el.disabled=rw_truthy(val);}")
+    // ARIA states are the words true and false, never 1 and "".
+    out = out.concat("else if(kind==='aria'){el.setAttribute(b[3],rw_truthy(val)?'true':'false');}")
     // Writing a field the visitor is typing in would move the caret, so only
     // write when the value actually differs.
     out = out.concat("else if(kind==='value'){")
@@ -2031,7 +2068,11 @@ fun _render_runtime() -> String {
     out = out.concat("try{spec=JSON.parse(g);}catch(e){spec=null;}")
     out = out.concat("if(spec&&!rw_truthy(rw_get(spec.k))){rw_go(spec.to);return;}}}")
     out = out.concat("for(var j=0;j<els.length;j++){els[j].hidden=els[j]!==hit;}")
-    out = out.concat("rw_setstate('route',params||{});}")
+    out = out.concat("rw_setstate('route',params||{});")
+    // Moving focus is how a screen reader learns the view changed. Not on the
+    // first paint: the page is being read out already, and stealing focus then
+    // would interrupt it.
+    out = out.concat("if(rw_booted&&hit&&hit!==rw_seen){hit.focus();}rw_seen=hit;}")
     out = out.concat(
         "function rw_go(path){var to=rw_path(path);if(to!==rw_path(location.pathname)){history.pushState({},'',to);}rw_route();}",
     )
@@ -2067,7 +2108,7 @@ fun _render_runtime() -> String {
     out = out.concat("if(!el){return;}var to=el.getAttribute('data-rw-link');if(!to){return;}")
     out = out.concat("ev.preventDefault();rw_go(to);});")
     out = out.concat("window.addEventListener('popstate',function(){rw_route();});")
-    out = out.concat("rw_load();rw_route();rw_apply();rw_run(rw_onload);")
+    out = out.concat("rw_load();rw_route();rw_apply();rw_run(rw_onload);rw_booted=true;")
     return out.concat("})();")
 }
 
@@ -2924,9 +2965,13 @@ impl Router {
     fun to_node(self) -> Node {
         let out = Node.fragment()
         for item in self.routes {
-            let holder = Node.div().attr("data-rw-route", item.pattern).attr("hidden", "hidden").child(
-                item.view,
-            )
+            // tabindex -1 keeps the container out of the tab order while still
+            // letting the runtime move focus here on a navigation, which is
+            // what tells a screen reader the view changed.
+            let holder = Node.div().attr("data-rw-route", item.pattern).attr("hidden", "hidden").attr(
+                "tabindex",
+                "-1",
+            ).child(item.view)
             if item.guard_key != "" {
                 let _ = holder.attr("data-rw-guard", _guard_json(item.guard_key, item.guard_to))
             }
@@ -2935,7 +2980,9 @@ impl Router {
         match self.missing {
             Some(view) -> {
                 let _ = out.child(
-                    Node.div().attr("data-rw-route", "*").attr("hidden", "hidden").child(view),
+                    Node.div().attr("data-rw-route", "*").attr("hidden", "hidden").attr("tabindex", "-1").child(
+                        view,
+                    ),
                 )
             },
             None -> {},

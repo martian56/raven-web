@@ -65,6 +65,16 @@ Option A (grow the library, no compiler change) is the chosen path. Status:
   hatch beside them was not, so the safety claim was only ever true of the path
   the tests took.
 
+- **Accessibility, also not in the original list, addressed in v0.11.0.** The
+  library could not express an ARIA state correctly: `attr_of(open,
+  "aria-expanded")` wrote `aria-expanded="1"`, which is invalid, so the control
+  announced as collapsed forever and nothing reported it. `aria_if`/`aria_when`
+  now write the words; `ctx.id_for` gives a component instance a unique id, so
+  `aria-controls`/`aria-describedby`/`label for` work in a component used more
+  than once; and `Router` moves focus to the matched route on navigation.
+  Verified in a DOM. This was the same shape as every other bug found here: the
+  binding looked wired and did nothing.
+
 **Where that leaves the goal.** Every Tier 2, 3, and 4 item that Option A can
 reach is now done, and Tier 1 is half done: components are reusable, typed, and
 stateful, but only where the tree is known at build time. What is left is the

@@ -16,3 +16,4 @@ dist-typed/
 dist-xss/
 dist-tagcheck/
 dist-bench/
+dist-a11y/

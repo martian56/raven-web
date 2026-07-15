@@ -694,6 +694,58 @@ fun test_relative_urls_are_allowed_and_schemes_are_judged() {
     assert_false(Node.link("Bad", "file:///etc/passwd").render().contains("href="))
 }
 
+// ARIA states are the words true and false. raven-web's truthiness is "1" and
+// "", so attr_of(open, "aria-expanded") writes aria-expanded="1", which is
+// invalid and silently leaves a control announcing as collapsed. aria_if exists
+// to make that impossible.
+fun test_aria_states_bind_to_the_words_true_and_false() {
+    let open = signal("open", "")
+    let page = Page.new("A", Node.button("Menu").aria_if(open, "expanded")).signal(open)
+    let js = page.js()
+    assert_true(js.contains("\"aria\""))
+    assert_true(js.contains("aria-expanded"))
+    // The runtime writes the words, never the raw state value.
+    assert_true(js.contains("'true':'false'"))
+
+    // An expression works the same way, so a rule can drive aria-invalid.
+    let touched = signal("touched", "")
+    let bad = Page.new("B", Node.input_field("Email").aria_when(Expr.of(touched), "invalid")).signal(
+        touched,
+    ).js()
+    assert_true(bad.contains("aria-invalid"))
+    assert_true(bad.contains("\"touched\":["))
+}
+
+// A component used twice cannot hard-code a DOM id, but accessible markup has
+// to point at elements by id. id_for scopes one per instance.
+fun test_instance_ids_are_unique_and_scoped() {
+    let ui = app()
+    let first = ui.instance()
+    let second = ui.instance()
+    assert_true(first.id_for("panel") != second.id_for("panel"))
+    // Stable: asking twice gives the same id, so markup can point at it.
+    assert_true(first.id_for("panel") == first.id_for("panel"))
+    // Distinct names within one instance stay distinct.
+    assert_true(first.id_for("panel") != first.id_for("input"))
+
+    let panel = first.id_for("panel")
+    let open = first.local("open", "")
+    let html = Node.section().child(
+        Node.button("Head").attr("aria-controls", panel).aria_if(open, "expanded"),
+    ).child(Node.div().id(panel).visible_if(open)).render()
+    assert_true(html.contains("aria-controls=\"".concat(panel).concat("\"")))
+    assert_true(html.contains("id=\"".concat(panel).concat("\"")))
+}
+
+fun test_router_containers_can_take_focus_without_joining_the_tab_order() {
+    let html = Page.new("R", Router.new().route("/", Node.h1().child_text("Home")).to_node()).html()
+    assert_true(html.contains("tabindex=\"-1\""))
+    // Focus moves on a navigation, but not on the first paint.
+    let js = Page.new("R", Router.new().route("/", Node.div()).to_node()).js()
+    assert_true(js.contains("rw_booted"))
+    assert_true(js.contains("hit.focus()"))
+}
+
 fun test_semantic_constructors_render() {
     let html = Node.form().child(Node.checkbox().id("ready")).child(Node.textarea("Notes")).child(
         Node.select().child(Node.option("Raven", "raven")),

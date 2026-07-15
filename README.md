@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.10.0"
+"github.com/martian56/raven-web" = "v0.11.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -142,6 +142,39 @@ Page.new("Board", body).signal(tasks)
 It stays live state: behaviors can clear or replace it, and `fetch` can refill
 it later. `Page.data(key, json)` does the same for a key you address directly,
 and `ctx.local_of` gives a component structured local state.
+
+## Accessibility
+
+The pieces a screen reader needs are bindings like any other.
+
+```rust
+fun accordion(ctx: Ctx, heading: String, body: String) -> Node {
+    let open = ctx.local("open", "")
+    let panel = ctx.id_for("panel")          // unique to this instance
+    return Node.section().child(
+        Node.button(heading).attr("aria-controls", panel).aria_if(open, "expanded"),
+    ).child(Node.p().id(panel).child_text(body).visible_if(open))
+}
+```
+
+- `aria_if(signal, name)` and `aria_when(expr, name)` keep an ARIA state
+  correct. Use these rather than `attr_of`: ARIA states are the words `true` and
+  `false`, while raven-web's truthiness is `"1"` and `""`, so
+  `attr_of(open, "aria-expanded")` writes `aria-expanded="1"`, which is invalid
+  and leaves the control announcing as collapsed with nothing reporting it.
+- `ctx.id_for(name)` gives an id unique to the component instance, which is what
+  makes `aria-controls`, `aria-describedby`, and `label for` work in a component
+  used more than once.
+- `Router` moves focus to the matched route on a navigation, so the new view is
+  announced. The container is `tabindex="-1"`, so it takes focus without joining
+  the tab order, and focus is not stolen on first paint.
+- `visible_if`/`hidden_if` hide with `display:none`, so hidden content is out of
+  the accessibility tree too, and `disabled_when` sets the real `disabled`
+  property rather than a class.
+
+`examples/form.rv` shows a field wired up properly: label tied by id,
+`aria-describedby` pointing at the error, `aria-invalid` tracking the rule, and
+`role="alert"` so the message is read out when it appears.
 
 ## Performance
 

@@ -13,11 +13,20 @@ import "../lib" { Behavior, Ctx, Expr, Node, Page, Stylesheet, app }
 
 // A section that opens and closes. Used three times below; each copy keeps its
 // own open state.
+//
+// It is also announced correctly: aria-expanded tracks the signal, and
+// aria-controls points at this instance's own panel. ctx.id_for is what makes
+// that possible with the component used three times, since a hard-coded id
+// would collide.
 fun accordion(ctx: Ctx, heading: String, body: String) -> Node {
     let open = ctx.local("open", "")
+    let panel = ctx.id_for("panel")
     return Node.section().class_name("acc").child(
-        Node.button(heading).class_name("acc-head").on_click(Behavior.new().toggle(open)),
-    ).child(Node.p().class_name("acc-body").child_text(body).visible_if(open))
+        Node.button(heading).class_name("acc-head").attr("aria-controls", panel).aria_if(
+            open,
+            "expanded",
+        ).on_click(Behavior.new().toggle(open)),
+    ).child(Node.p().id(panel).class_name("acc-body").child_text(body).visible_if(open))
 }
 
 // A counter whose step is a prop. Two instances, two independent totals.
