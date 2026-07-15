@@ -837,6 +837,25 @@ impl StaticFile {
     }
 }
 
+// One field of a JSON request body, read from an input at send time.
+struct BodyField {
+    name: String,
+    selector: String,
+}
+
+// A typed HTTP request. The author never writes fetch code: raven-web emits it.
+// `auth_state` names a state key whose value is sent as a Bearer token.
+// `into_state` names a state key to receive the decoded JSON response.
+struct FetchSpec {
+    method: String,
+    url: String,
+    body_fields: List<BodyField>,
+    auth_state: String,
+    into_state: String,
+    then: List<Effect>,
+    on_error: List<Effect>,
+}
+
 enum Effect {
     SetText(String, String),
     SetValue(String, String),
@@ -855,6 +874,8 @@ enum Effect {
     SetState(String, String),
     ToggleState(String),
     IncrementState(String, Int),
+    Fetch(FetchSpec),
+    ClearState(String),
 }
 
 // A composable, typed sequence of DOM effects. Attached to an element event via
@@ -878,6 +899,63 @@ fun _valid_class_token(value: String) -> Bool {
         i += 1
     }
     return _css_safe_text(value)
+}
+
+// Build a typed request: request("POST", "/login").field("email", "#email")
+//     .store("auth").on_ok(Behavior.new().hide("#login"))
+fun request(method: String, url: String) -> FetchSpec {
+    let body_fields: List<BodyField> = []
+    let then: List<Effect> = []
+    let on_error: List<Effect> = []
+    return FetchSpec {
+        method: method.to_upper(),
+        url,
+        body_fields,
+        auth_state: "",
+        into_state: "",
+        then,
+        on_error,
+    }
+}
+
+impl FetchSpec {
+    // Read `selector`'s value at send time and send it as JSON field `name`.
+    fun field(self, name: String, selector: String) -> FetchSpec {
+        if _css_safe_text(selector) {
+            self.body_fields.push(BodyField { name, selector })
+        }
+        return self
+    }
+
+    // Send state[key] as an Authorization: Bearer header.
+    fun auth(self, state_key: String) -> FetchSpec {
+        if _css_safe_text(state_key) {
+            self.auth_state = state_key
+        }
+        return self
+    }
+
+    // Store the decoded JSON response in state[key], where bindings can read it.
+    fun store(self, state_key: String) -> FetchSpec {
+        if _css_safe_text(state_key) {
+            self.into_state = state_key
+        }
+        return self
+    }
+
+    fun on_ok(self, behavior: Behavior) -> FetchSpec {
+        for effect in behavior.effects {
+            self.then.push(effect)
+        }
+        return self
+    }
+
+    fun on_error(self, behavior: Behavior) -> FetchSpec {
+        for effect in behavior.effects {
+            self.on_error.push(effect)
+        }
+        return self
+    }
 }
 
 fun behavior() -> Behavior {
@@ -1020,6 +1098,22 @@ impl Behavior {
         }
         return self
     }
+
+    fun clear_state(self, key: String) -> Behavior {
+        if _css_safe_text(key) {
+            self.effects.push(Effect.ClearState(key))
+        }
+        return self
+    }
+
+    // Send a typed HTTP request. raven-web generates the fetch, the JSON body
+    // from the named inputs, and the Bearer header; the author writes no JS.
+    fun fetch(self, spec: FetchSpec) -> Behavior {
+        if _safe_url(spec.url) || spec.url.starts_with("/") {
+            self.effects.push(Effect.Fetch(spec))
+        }
+        return self
+    }
 }
 
 fun _js_string(value: String) -> String {
@@ -1044,6 +1138,45 @@ fun _op4(code: String, a: String, b: String, c: String) -> String {
     ).concat(",").concat(_js_string(c)).concat("]")
 }
 
+fun _serialize_effects(effects: List<Effect>) -> String {
+    let out = "["
+    let first = true
+    for effect in effects {
+        if !first {
+            out = out.concat(",")
+        }
+        out = out.concat(_serialize_effect(effect))
+        first = false
+    }
+    return out.concat("]")
+}
+
+// ["fetch",{"m":..,"u":..,"b":[[name,sel]],"a":authKey,"s":storeKey,"t":[..],"e":[..]}]
+fun _serialize_fetch(spec: FetchSpec) -> String {
+    let out = "[".concat(_js_string("fetch")).concat(",{")
+    out = out.concat(_js_string("m")).concat(":").concat(_js_string(spec.method))
+    out = out.concat(",").concat(_js_string("u")).concat(":").concat(_js_string(spec.url))
+    out = out.concat(",").concat(_js_string("b")).concat(":[")
+    let first = true
+    for field in spec.body_fields {
+        if !first {
+            out = out.concat(",")
+        }
+        out = out.concat("[").concat(_js_string(field.name)).concat(",").concat(
+            _js_string(field.selector),
+        ).concat("]")
+        first = false
+    }
+    out = out.concat("]")
+    out = out.concat(",").concat(_js_string("a")).concat(":").concat(_js_string(spec.auth_state))
+    out = out.concat(",").concat(_js_string("s")).concat(":").concat(_js_string(spec.into_state))
+    out = out.concat(",").concat(_js_string("t")).concat(":").concat(_serialize_effects(spec.then))
+    out = out.concat(",").concat(_js_string("e")).concat(":").concat(
+        _serialize_effects(spec.on_error),
+    )
+    return out.concat("}]")
+}
+
 fun _serialize_effect(effect: Effect) -> String {
     return match effect {
         SetText(selector, value) -> _op3("st", selector, value),
@@ -1063,6 +1196,8 @@ fun _serialize_effect(effect: Effect) -> String {
         SetState(key, value) -> _op3("ss", key, value),
         ToggleState(key) -> _op2("ts", key),
         IncrementState(key, by) -> _op3("is", key, by.to_string()),
+        ClearState(key) -> _op2("cs", key),
+        Fetch(spec) -> _serialize_fetch(spec),
     }
 }
 
@@ -1091,7 +1226,36 @@ fun _serialize_behavior(behavior: Behavior) -> String {
 fun _render_runtime() -> String {
     let out = "(function(){'use strict';"
     out = out.concat(
-        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];",
+        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];",
+    )
+    // Dotted state paths, so a binding can read into a stored JSON response.
+    out = out.concat(
+        "function rw_get(path){var parts=String(path).split('.');var cur=rw_state;for(var i=0;i<parts.length;i++){if(cur===null||cur===undefined){return undefined;}cur=cur[parts[i]];}return cur;}",
+    )
+    out = out.concat(
+        "function rw_persist(key){if(rw_keep.indexOf(key)<0){return;}try{var v=rw_state[key];if(v===undefined||v===null){localStorage.removeItem('rw:'+key);}else{localStorage.setItem('rw:'+key,JSON.stringify(v));}}catch(e){}}",
+    )
+    out = out.concat(
+        "function rw_load(){for(var i=0;i<rw_keep.length;i++){var k=rw_keep[i];try{var v=localStorage.getItem('rw:'+k);if(v!==null){rw_state[k]=JSON.parse(v);}}catch(e){}}}",
+    )
+    // Escape a value being substituted into a serialized behavior attribute.
+    // Uses char codes (92 backslash, 34 quote) to avoid escape sequences here.
+    out = out.concat(
+        "function rw_esc(v){var o='';for(var i=0;i<v.length;i++){var c=v.charCodeAt(i);if(c===92||c===34){o+=String.fromCharCode(92);}o+=v.charAt(i);}return o;}",
+    )
+    out = out.concat(
+        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=item[f];if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
+    )
+    // Fill a cloned template: item data only ever reaches the DOM through
+    // setAttribute and nodeValue, never innerHTML, so it cannot inject markup.
+    out = out.concat(
+        "function rw_fill(node,item){if(node.attributes){for(var i=0;i<node.attributes.length;i++){var a=node.attributes[i];if(a.value.indexOf('{{')>=0){node.setAttribute(a.name,rw_subst(a.value,item,a.name.indexOf('data-rw-')===0));}}}for(var c=node.firstChild;c;c=c.nextSibling){if(c.nodeType===3){if(c.nodeValue.indexOf('{{')>=0){c.nodeValue=rw_subst(c.nodeValue,item,false);}}else if(c.nodeType===1){rw_fill(c,item);}}}",
+    )
+    out = out.concat(
+        "function rw_list(b){var box=rw_find(b[1]);if(!box){return;}var items=rw_get(b[2]);box.innerHTML='';if(!items||!items.length){return;}var tmp=document.createElement('div');tmp.innerHTML=b[3];var proto=tmp.firstElementChild;if(!proto){return;}var ff=b[4];var fv=b[5];for(var i=0;i<items.length;i++){var it=items[i];if(ff!==''&&String(it[ff])!==fv){continue;}var n=proto.cloneNode(true);rw_fill(n,it);box.appendChild(n);}}",
+    )
+    out = out.concat(
+        "function rw_fetch(spec){var body=null;var headers={};if(spec.b&&spec.b.length){var o={};for(var i=0;i<spec.b.length;i++){var f=spec.b[i];var el=rw_find(f[1]);o[f[0]]=el?rw_val(el):'';}body=JSON.stringify(o);headers['Content-Type']='application/json';}if(spec.a){var t=rw_get(spec.a);if(t){headers['Authorization']='Bearer '+t;}}fetch(spec.u,{method:spec.m,headers:headers,body:body}).then(function(r){if(!r.ok){throw new Error('http '+r.status);}var ct=r.headers.get('content-type')||'';return ct.indexOf('json')>=0?r.json():null;}).then(function(data){if(spec.s){rw_state[spec.s]=data;rw_persist(spec.s);}rw_apply();rw_run(spec.t||[]);}).catch(function(){rw_run(spec.e||[]);});}",
     )
     out = out.concat(
         "function rw_find(s){try{return document.querySelector(s);}catch(e){return null;}}",
@@ -1105,11 +1269,13 @@ fun _render_runtime() -> String {
         "function rw_truthy(v){return v!==undefined&&v!==null&&v!==''&&v!=='0'&&v!=='false';}",
     )
     out = out.concat(
-        "function rw_apply(){for(var i=0;i<rw_binds.length;i++){var b=rw_binds[i];var kind=b[0];var els=rw_all(b[1]);var val=rw_state[b[2]];for(var j=0;j<els.length;j++){var el=els[j];",
+        "function rw_apply(){for(var i=0;i<rw_binds.length;i++){var b=rw_binds[i];var kind=b[0];if(kind==='list'){rw_list(b);continue;}var els=rw_all(b[1]);var val=rw_get(b[2]);for(var j=0;j<els.length;j++){var el=els[j];",
     )
-    out = out.concat("if(kind==='text'){el.textContent=val===undefined?'':val;}")
+    out = out.concat("if(kind==='text'){el.textContent=val===undefined||val===null?'':val;}")
     out = out.concat("else if(kind==='class'){el.classList.toggle(b[3],rw_truthy(val));}")
-    out = out.concat("else if(kind==='attr'){el.setAttribute(b[3],val===undefined?'':val);}")
+    out = out.concat(
+        "else if(kind==='attr'){el.setAttribute(b[3],val===undefined||val===null?'':val);}",
+    )
     out = out.concat("else if(kind==='visible'){rw_vis(el,rw_truthy(val));}")
     out = out.concat("}}}")
     out = out.concat(
@@ -1133,13 +1299,15 @@ fun _render_runtime() -> String {
     out = out.concat(
         "else if(k==='cc'){if(a&&navigator.clipboard){navigator.clipboard.writeText(rw_val(a));}}",
     )
-    out = out.concat("else if(k==='ss'){rw_state[op[1]]=op[2];rw_apply();}")
+    out = out.concat("else if(k==='ss'){rw_state[op[1]]=op[2];rw_persist(op[1]);rw_apply();}")
     out = out.concat(
-        "else if(k==='ts'){rw_state[op[1]]=rw_truthy(rw_state[op[1]])?'0':'1';rw_apply();}",
+        "else if(k==='ts'){rw_state[op[1]]=rw_truthy(rw_state[op[1]])?'0':'1';rw_persist(op[1]);rw_apply();}",
     )
     out = out.concat(
-        "else if(k==='is'){var cur=parseInt(rw_state[op[1]]||'0',10)||0;var by=parseInt(op[2],10)||0;rw_state[op[1]]=String(cur+by);rw_apply();}",
+        "else if(k==='is'){var cur=parseInt(rw_state[op[1]]||'0',10)||0;var by=parseInt(op[2],10)||0;rw_state[op[1]]=String(cur+by);rw_persist(op[1]);rw_apply();}",
     )
+    out = out.concat("else if(k==='cs'){delete rw_state[op[1]];rw_persist(op[1]);rw_apply();}")
+    out = out.concat("else if(k==='fetch'){rw_fetch(op[1]);}")
     out = out.concat("}}")
     out = out.concat(
         "function rw_dispatch(ev,name){var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-'+name+']');if(!el){return;}var raw=el.getAttribute('data-rw-'+name);if(!raw){return;}var spec;try{spec=JSON.parse(raw);}catch(e){return;}if(spec.p){ev.preventDefault();}rw_run(spec.e||[]);}",
@@ -1150,7 +1318,7 @@ fun _render_runtime() -> String {
     out = out.concat(
         "for(var j=0;j<rw_events.length;j++){(function(name){document.addEventListener(name,function(ev){rw_dispatch(ev,name);},true);})(rw_events[j]);}",
     )
-    out = out.concat("rw_apply();")
+    out = out.concat("rw_load();rw_apply();")
     return out.concat("})();")
 }
 
@@ -1159,16 +1327,27 @@ struct StatePair {
     value: String,
 }
 
-// A reflection of client state to the DOM. kind is text, class, attr, or
-// visible; arg carries the class or attribute name where relevant.
+// A reflection of client state to the DOM. kind is text, class, attr, visible,
+// or list; arg carries the class name, attribute name, or (for list) the
+// rendered item template. A list binding may filter items by a field value.
 struct Binding {
     kind: String,
     selector: String,
     key: String,
     arg: String,
+    filter_field: String,
+    filter_value: String,
 }
 
-fun _serialize_config(state: List<StatePair>, bindings: List<Binding>) -> String {
+fun _binding(kind: String, selector: String, key: String, arg: String) -> Binding {
+    return Binding { kind, selector, key, arg, filter_field: "", filter_value: "" }
+}
+
+fun _serialize_config(
+    state: List<StatePair>,
+    bindings: List<Binding>,
+    persisted: List<String>,
+) -> String {
     let out = "{".concat(_js_string("s")).concat(":{")
     let first = true
     for pair in state {
@@ -1187,9 +1366,20 @@ fun _serialize_config(state: List<StatePair>, bindings: List<Binding>) -> String
         out = out.concat("[").concat(_js_string(binding.kind)).concat(",").concat(
             _js_string(binding.selector),
         ).concat(",").concat(_js_string(binding.key)).concat(",").concat(_js_string(binding.arg)).concat(
+            ",",
+        ).concat(_js_string(binding.filter_field)).concat(",").concat(_js_string(binding.filter_value)).concat(
             "]",
         )
         bfirst = false
+    }
+    out = out.concat("],").concat(_js_string("p")).concat(":[")
+    let pfirst = true
+    for key in persisted {
+        if !pfirst {
+            out = out.concat(",")
+        }
+        out = out.concat(_js_string(key))
+        pfirst = false
     }
     return out.concat("]}")
 }
@@ -1205,6 +1395,7 @@ struct Page {
     css_links: List<String>,
     state: List<StatePair>,
     bindings: List<Binding>,
+    persisted: List<String>,
 }
 
 struct StaticOutput {
@@ -1255,6 +1446,11 @@ fun _empty_bindings() -> List<Binding> {
     return bindings
 }
 
+fun _empty_persisted() -> List<String> {
+    let persisted: List<String> = []
+    return persisted
+}
+
 fun _valid_language(value: String) -> Bool {
     if value.length() == 0 || !_ascii_letter(value.byte_at(0)) {
         return false
@@ -1284,6 +1480,7 @@ impl Page {
             css_links: _empty_css_links(),
             state: _empty_state(),
             bindings: _empty_bindings(),
+            persisted: _empty_persisted(),
         }
     }
 
@@ -1298,28 +1495,71 @@ impl Page {
 
     fun bind_text(self, selector: String, key: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
-            self.bindings.push(Binding { kind: "text", selector, key, arg: "" })
+            self.bindings.push(_binding("text", selector, key, ""))
         }
         return self
     }
 
     fun bind_class(self, selector: String, key: String, class_name: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) && _valid_class_token(class_name) {
-            self.bindings.push(Binding { kind: "class", selector, key, arg: class_name })
+            self.bindings.push(_binding("class", selector, key, class_name))
         }
         return self
     }
 
     fun bind_attr(self, selector: String, key: String, attr: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) && _valid_attr_name(attr) {
-            self.bindings.push(Binding { kind: "attr", selector, key, arg: attr })
+            self.bindings.push(_binding("attr", selector, key, attr))
         }
         return self
     }
 
     fun bind_visible(self, selector: String, key: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
-            self.bindings.push(Binding { kind: "visible", selector, key, arg: "" })
+            self.bindings.push(_binding("visible", selector, key, ""))
+        }
+        return self
+    }
+
+    // Render `template` once per item in the array at state path `key`, into
+    // `selector`. Inside the template, {{field}} is replaced by that item's
+    // field. Substitution goes through textContent and setAttribute, never
+    // innerHTML, so item data can never inject markup.
+    fun bind_list(self, selector: String, key: String, template: Node) -> Page {
+        if _css_safe_text(selector) && _css_safe_text(key) {
+            self.bindings.push(_binding("list", selector, key, template.render()))
+        }
+        return self
+    }
+
+    // bind_list, but only items whose `field` equals `value` (board columns).
+    fun bind_list_where(
+        self,
+        selector: String,
+        key: String,
+        template: Node,
+        field: String,
+        value: String,
+    ) -> Page {
+        if _css_safe_text(selector) && _css_safe_text(key) {
+            self.bindings.push(
+                Binding {
+                    kind: "list",
+                    selector,
+                    key,
+                    arg: template.render(),
+                    filter_field: field,
+                    filter_value: value,
+                },
+            )
+        }
+        return self
+    }
+
+    // Keep state[key] in localStorage, so it survives a reload (a login token).
+    fun persist(self, key: String) -> Page {
+        if _css_safe_text(key) {
+            self.persisted.push(key)
         }
         return self
     }
@@ -1418,9 +1658,9 @@ impl Page {
     }
 
     fun js(self) -> String {
-        return "window.RW_INIT=".concat(_serialize_config(self.state, self.bindings)).concat(";").concat(
-            _render_runtime(),
-        )
+        return "window.RW_INIT=".concat(
+            _serialize_config(self.state, self.bindings, self.persisted),
+        ).concat(";").concat(_render_runtime())
     }
 
     fun write_static(self, dir: String) -> Result<StaticOutput, Error> {

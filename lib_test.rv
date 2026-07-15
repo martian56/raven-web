@@ -1,6 +1,6 @@
 import std/fs { exists, read }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, CssRule, Layout, Node, Page, Site, StaticFile, Stylesheet, Theme }
+import "./lib" { Behavior, CssRule, Layout, Node, Page, Site, StaticFile, Stylesheet, Theme, request }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -143,6 +143,66 @@ fun test_client_state_and_bindings() {
     let html = page.html()
     assert_true(html.contains("data-rw-click="))
     assert_true(html.contains("counter"))
+}
+
+fun test_fetch_effect_serializes_typed_request() {
+    let login = Node.button("Sign in").on_click(
+        Behavior.new().fetch(
+            request("POST", "/login").field("email", "#email").field("password", "#password").store(
+                "auth",
+            ).on_ok(Behavior.new().hide("#login").set_text("#msg", "Welcome")).on_error(
+                Behavior.new().set_text("#msg", "Bad credentials"),
+            ),
+        ),
+    ).render()
+    assert_true(login.contains("data-rw-click="))
+    // The request is serialized as data: method, url, body fields, store key.
+    assert_true(login.contains("fetch"))
+    assert_true(login.contains("POST"))
+    assert_true(login.contains("/login"))
+    assert_true(login.contains("#email"))
+    assert_true(login.contains("auth"))
+
+    // An authenticated GET carries the bearer state key, not a literal token.
+    let refresh = Node.button("Refresh").on_click(
+        Behavior.new().fetch(request("GET", "/tasks").auth("auth.token").store("tasks")),
+    ).render()
+    assert_true(refresh.contains("auth.token"))
+
+    // A javascript: URL is rejected before it can reach the output.
+    let unsafe = Node.button("Bad").on_click(
+        Behavior.new().fetch(request("GET", "javascript:alert(1)")),
+    ).render()
+    assert_false(unsafe.contains("javascript"))
+}
+
+fun test_list_binding_and_persisted_state() {
+    // {{field}} placeholders are filled per item by the runtime.
+    let row = Node.li().class_name("task").child(Node.span().child_text("{{title}}")).child(
+        Node.button("Done").on_click(
+            Behavior.new().fetch(request("POST", "/tasks/{{id}}/status").auth("auth.token")),
+        ),
+    )
+    let page = Page.new("Board", Node.ul().id("todo")).state("auth", "").persist("auth").bind_list_where(
+        "#todo",
+        "tasks.tasks",
+        row,
+        "status",
+        "todo",
+    ).bind_text("#org", "auth.org_id")
+
+    let js = page.js()
+    // The template, the filter, and the persisted key all reach the config.
+    assert_true(js.contains("list"))
+    assert_true(js.contains("tasks.tasks"))
+    assert_true(js.contains("{{title}}"))
+    assert_true(js.contains("status"))
+    assert_true(js.contains("auth.org_id"))
+    // The runtime fills templates without innerHTML for item data.
+    assert_true(js.contains("rw_fill"))
+    assert_true(js.contains("setAttribute"))
+    assert_true(js.contains("localStorage"))
+    assert_true(js.contains("rw_fetch"))
 }
 
 fun test_theme_tokens_light_and_dark() {
