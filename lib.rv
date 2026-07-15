@@ -709,10 +709,26 @@ impl Node {
 impl Node {
     // Invalid or executable-looking attributes are ignored rather than
     // emitted. CSS utility classes are ordinary class values and pass through.
+    // Setting an attribute twice must not emit it twice: an HTML parser keeps
+    // the first copy and silently drops the rest, so a second write would be a
+    // no-op. `class` accumulates, which is what a caller adding a class to a
+    // component's own markup means; every other attribute is replaced, so the
+    // last write wins.
     fun attr(self, name: String, value: String) -> Node {
-        if _valid_attr_name(name) {
-            self.attrs.push(Attribute { name, value })
+        if !_valid_attr_name(name) {
+            return self
         }
+        for existing in self.attrs {
+            if existing.name == name {
+                if name == "class" {
+                    existing.value = _merge_classes(existing.value, value)
+                } else {
+                    existing.value = value
+                }
+                return self
+            }
+        }
+        self.attrs.push(Attribute { name, value })
         return self
     }
 
@@ -1014,6 +1030,33 @@ struct CssRule {
 struct Stylesheet {
     rules: List<CssRule>,
     raw_blocks: List<String>,
+}
+
+// Append the classes of `extra` that `current` does not already carry, so
+// repeated class_name calls compose instead of colliding.
+fun _merge_classes(current: String, extra: String) -> String {
+    let out = current.trim()
+    for token in extra.split(" ") {
+        let clean = token.trim()
+        if clean.length() > 0 && !_has_class(out, clean) {
+            if out.length() == 0 {
+                out = clean
+            } else {
+                out = out.concat(" ").concat(clean)
+            }
+        }
+    }
+    return out
+}
+
+// Whole-token membership: "btn" must not match inside "btn-primary".
+fun _has_class(list: String, token: String) -> Bool {
+    for existing in list.split(" ") {
+        if existing == token {
+            return true
+        }
+    }
+    return false
 }
 
 fun _css_safe_text(value: String) -> Bool {

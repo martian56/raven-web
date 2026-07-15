@@ -503,6 +503,32 @@ fun test_components_nest_and_props_reach_the_markup() {
     assert_true(page.js().contains("c2_open"))
 }
 
+// An HTML parser keeps the first copy of a repeated attribute and drops the
+// rest, so emitting it twice made the second write a silent no-op. That bites
+// hardest when a caller adds a class to a component that already set its own.
+fun test_repeated_attributes_compose_instead_of_colliding() {
+    // class accumulates, in author order, without repeating a token.
+    let merged = Node.div().class_name("card").class_name("wide").render()
+    assert_true(merged.contains("class=\"card wide\""))
+    let deduped = Node.div().class_name("btn").class_name("btn-primary").class_name("btn").render()
+    assert_true(deduped.contains("class=\"btn btn-primary\""))
+    // Whole-token matching: "b" already present must not swallow "btn".
+    let tokens = Node.div().class_name("a b").class_name("b c").render()
+    assert_true(tokens.contains("class=\"a b c\""))
+
+    // Every other attribute is replaced, and emitted once.
+    let replaced = Node.div().attr("data-x", "1").attr("data-x", "2").render()
+    assert_true(replaced.contains("data-x=\"2\""))
+    assert_false(replaced.contains("data-x=\"1\""))
+    let ids = Node.div().id("first").id("second").render()
+    assert_true(ids.contains("id=\"second\""))
+    assert_false(ids.contains("first"))
+
+    // A component that sets its own class stays composable from outside.
+    let composed = disclosure(app().instance(), "Head").class_name("mt-4").render()
+    assert_true(composed.contains("disclosure mt-4"))
+}
+
 fun test_semantic_constructors_render() {
     let html = Node.form().child(Node.checkbox().id("ready")).child(Node.textarea("Notes")).child(
         Node.select().child(Node.option("Raven", "raven")),
