@@ -31,6 +31,174 @@ impl Signal {
     }
 }
 
+// A computed expression over signals. Raven has no operator overloading, so the
+// DSL is function calls: Expr.gt(Expr.len(tasks), Expr.num(0)). It compiles to a
+// small data tree that the runtime evaluates; nothing is ever eval'd, so the CSP
+// and safety model hold. Dependencies are derived from the tree, so a binding
+// built from an expression updates when any signal it reads changes.
+enum Expr {
+    Sig(String),
+    Str(String),
+    Num(Int),
+    Bool(Bool),
+    Not(Expr),
+    Len(Expr),
+    IsEmpty(Expr),
+    Eq(Expr, Expr),
+    Ne(Expr, Expr),
+    Gt(Expr, Expr),
+    Lt(Expr, Expr),
+    And(Expr, Expr),
+    Or(Expr, Expr),
+    Add(Expr, Expr),
+    Sub(Expr, Expr),
+    Concat(Expr, Expr),
+    Ternary(Expr, Expr, Expr),
+}
+
+impl Expr {
+    // Read a signal (or a path into one, via Signal.at).
+    fun of(source: Signal) -> Expr = Expr.Sig(source.path)
+
+    fun text(value: String) -> Expr = Expr.Str(value)
+
+    fun int(value: Int) -> Expr = Expr.Num(value)
+
+    fun flag(value: Bool) -> Expr = Expr.Bool(value)
+
+    fun not(inner: Expr) -> Expr = Expr.Not(inner)
+
+    // Length of a string or array.
+    fun len(inner: Expr) -> Expr = Expr.Len(inner)
+
+    fun is_empty(inner: Expr) -> Expr = Expr.IsEmpty(inner)
+
+    fun eq(left: Expr, right: Expr) -> Expr = Expr.Eq(left, right)
+
+    fun ne(left: Expr, right: Expr) -> Expr = Expr.Ne(left, right)
+
+    fun gt(left: Expr, right: Expr) -> Expr = Expr.Gt(left, right)
+
+    fun lt(left: Expr, right: Expr) -> Expr = Expr.Lt(left, right)
+
+    fun and(left: Expr, right: Expr) -> Expr = Expr.And(left, right)
+
+    fun or(left: Expr, right: Expr) -> Expr = Expr.Or(left, right)
+
+    fun add(left: Expr, right: Expr) -> Expr = Expr.Add(left, right)
+
+    fun sub(left: Expr, right: Expr) -> Expr = Expr.Sub(left, right)
+
+    fun concat(left: Expr, right: Expr) -> Expr = Expr.Concat(left, right)
+
+    fun ternary(cond: Expr, then_value: Expr, else_value: Expr) -> Expr {
+        return Expr.Ternary(cond, then_value, else_value)
+    }
+}
+
+fun _serialize_expr(e: Expr) -> String {
+    return match e {
+        Sig(path) -> _op2("sig", path),
+        Str(value) -> _op2("str", value),
+        Num(value) -> "[".concat(_js_string("num")).concat(",").concat(value.to_string()).concat(
+            "]",
+        ),
+        Bool(value) -> {
+            let flag = if value {
+                "true"
+            } else {
+                "false"
+            }
+            "[".concat(_js_string("bool")).concat(",").concat(flag).concat("]")
+        },
+        Not(inner) -> _expr1("not", inner),
+        Len(inner) -> _expr1("len", inner),
+        IsEmpty(inner) -> _expr1("empty", inner),
+        Eq(left, right) -> _expr2("eq", left, right),
+        Ne(left, right) -> _expr2("ne", left, right),
+        Gt(left, right) -> _expr2("gt", left, right),
+        Lt(left, right) -> _expr2("lt", left, right),
+        And(left, right) -> _expr2("and", left, right),
+        Or(left, right) -> _expr2("or", left, right),
+        Add(left, right) -> _expr2("add", left, right),
+        Sub(left, right) -> _expr2("sub", left, right),
+        Concat(left, right) -> _expr2("cat", left, right),
+        Ternary(cond, a, b) -> "[".concat(_js_string("if")).concat(",").concat(
+            _serialize_expr(cond),
+        ).concat(",").concat(_serialize_expr(a)).concat(",").concat(_serialize_expr(b)).concat("]"),
+    }
+}
+
+fun _expr1(code: String, inner: Expr) -> String {
+    return "[".concat(_js_string(code)).concat(",").concat(_serialize_expr(inner)).concat("]")
+}
+
+fun _expr2(code: String, left: Expr, right: Expr) -> String {
+    return "[".concat(_js_string(code)).concat(",").concat(_serialize_expr(left)).concat(",").concat(
+        _serialize_expr(right),
+    ).concat("]")
+}
+
+// Every root state key the expression reads, so the binding subscribes to all
+// of them.
+fun _expr_keys(e: Expr, out: List<String>) {
+    match e {
+        Sig(path) -> {
+            let key = _root_key(path)
+            if !_contains_str(out, key) {
+                out.push(key)
+            }
+        },
+        Str(_) -> {},
+        Num(_) -> {},
+        Bool(_) -> {},
+        Not(inner) -> _expr_keys(inner, out),
+        Len(inner) -> _expr_keys(inner, out),
+        IsEmpty(inner) -> _expr_keys(inner, out),
+        Eq(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Ne(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Gt(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Lt(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        And(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Or(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Add(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Sub(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Concat(left, right) -> {
+            _expr_keys(left, out)
+            _expr_keys(right, out)
+        },
+        Ternary(cond, a, b) -> {
+            _expr_keys(cond, out)
+            _expr_keys(a, out)
+            _expr_keys(b, out)
+        },
+    }
+}
+
 // A binding a node declares about itself. The element is identified by a marker
 // raven-web assigns at render time, so no selector is ever written by hand.
 struct NodeBind {
@@ -39,10 +207,37 @@ struct NodeBind {
     arg: String,
     filter_field: String,
     filter_value: String,
+    expr: String,
+    dep_keys: List<String>,
 }
 
 fun _node_bind(kind: String, path: String, arg: String) -> NodeBind {
-    return NodeBind { kind, path, arg, filter_field: "", filter_value: "" }
+    let dep_keys: List<String> = [_root_key(path)]
+    return NodeBind {
+        kind,
+        path,
+        arg,
+        filter_field: "",
+        filter_value: "",
+        expr: "",
+        dep_keys,
+    }
+}
+
+// A binding whose value is computed from an expression rather than read from a
+// single path. It depends on every signal the expression reads.
+fun _node_bind_expr(kind: String, value: Expr, arg: String) -> NodeBind {
+    let dep_keys: List<String> = []
+    _expr_keys(value, dep_keys)
+    return NodeBind {
+        kind,
+        path: "",
+        arg,
+        filter_field: "",
+        filter_value: "",
+        expr: _serialize_expr(value),
+        dep_keys,
+    }
 }
 
 struct Node {
@@ -619,6 +814,38 @@ impl Node {
         return self
     }
 
+    // Bind to a computed expression instead of a single signal. This is what
+    // gives conditionals and derived text: hidden_when(Expr.is_empty(tasks)) or
+    // text_expr(Expr.ternary(Expr.eq(n, Expr.int(1)), Expr.text("1 task"), ...)).
+    fun text_expr(self, value: Expr) -> Node {
+        self.binds.push(_node_bind_expr("text", value, ""))
+        return self
+    }
+
+    fun visible_when(self, cond: Expr) -> Node {
+        self.binds.push(_node_bind_expr("visible", cond, ""))
+        return self
+    }
+
+    fun hidden_when(self, cond: Expr) -> Node {
+        self.binds.push(_node_bind_expr("hidden", cond, ""))
+        return self
+    }
+
+    fun class_when(self, cond: Expr, class_name: String) -> Node {
+        if _valid_class_token(class_name) {
+            self.binds.push(_node_bind_expr("class", cond, class_name))
+        }
+        return self
+    }
+
+    fun attr_expr(self, value: Expr, name: String) -> Node {
+        if _valid_attr_name(name) {
+            self.binds.push(_node_bind_expr("attr", value, name))
+        }
+        return self
+    }
+
     // Repeat `template` once per item of the array in `source`.
     fun each_of(self, source: Signal, template: Node) -> Node {
         self.binds.push(_node_bind("list", source.path, template.render()))
@@ -627,6 +854,7 @@ impl Node {
 
     // each_of, but only items whose `field` equals `value` (board columns).
     fun each_where(self, source: Signal, template: Node, field: String, value: String) -> Node {
+        let dep_keys: List<String> = [_root_key(source.path)]
         self.binds.push(
             NodeBind {
                 kind: "list",
@@ -634,6 +862,8 @@ impl Node {
                 arg: template.render(),
                 filter_field: field,
                 filter_value: value,
+                expr: "",
+                dep_keys,
             },
         )
         return self
@@ -1370,10 +1600,13 @@ fun _render_runtime() -> String {
     out = out.concat("function rw_vis(el,on){if(el){el.style.display=on?'':'none';}}")
     out = out.concat("function rw_val(el){return el.value!==undefined?el.value:el.textContent;}")
     out = out.concat(
-        "function rw_truthy(v){return v!==undefined&&v!==null&&v!==''&&v!=='0'&&v!=='false';}",
+        "function rw_truthy(v){if(v===undefined||v===null||v===false){return false;}if(v===true){return true;}if(typeof v==='number'){return v!==0;}return v!==''&&v!=='0'&&v!=='false';}",
     )
     out = out.concat(
         "function rw_get(path){var parts=String(path).split('.');var cur=rw_state;for(var i=0;i<parts.length;i++){if(cur===null||cur===undefined){return undefined;}cur=cur[parts[i]];}return cur;}",
+    )
+    out = out.concat(
+        "function rw_num(v){var n=Number(v);return isNaN(n)?0:n;}function rw_size(v){if(v===undefined||v===null){return 0;}if(v.length!==undefined){return v.length;}if(typeof v==='object'){return Object.keys(v).length;}return String(v).length;}function rw_eval(e){if(!e){return undefined;}var k=e[0];if(k==='sig'){return rw_get(e[1]);}if(k==='str'){return e[1];}if(k==='num'){return e[1];}if(k==='bool'){return e[1];}if(k==='not'){return !rw_truthy(rw_eval(e[1]));}if(k==='len'){return rw_size(rw_eval(e[1]));}if(k==='empty'){return rw_size(rw_eval(e[1]))===0;}if(k==='eq'){return String(rw_eval(e[1]))===String(rw_eval(e[2]));}if(k==='ne'){return String(rw_eval(e[1]))!==String(rw_eval(e[2]));}if(k==='gt'){return rw_num(rw_eval(e[1]))>rw_num(rw_eval(e[2]));}if(k==='lt'){return rw_num(rw_eval(e[1]))<rw_num(rw_eval(e[2]));}if(k==='and'){return rw_truthy(rw_eval(e[1]))&&rw_truthy(rw_eval(e[2]));}if(k==='or'){return rw_truthy(rw_eval(e[1]))||rw_truthy(rw_eval(e[2]));}if(k==='add'){return rw_num(rw_eval(e[1]))+rw_num(rw_eval(e[2]));}if(k==='sub'){return rw_num(rw_eval(e[1]))-rw_num(rw_eval(e[2]));}if(k==='cat'){var l=rw_eval(e[1]);var r=rw_eval(e[2]);return (l===undefined||l===null?'':String(l))+(r===undefined||r===null?'':String(r));}if(k==='if'){return rw_truthy(rw_eval(e[1]))?rw_eval(e[2]):rw_eval(e[3]);}return undefined;}",
     )
     out = out.concat(
         "function rw_persist(key){if(rw_keep.indexOf(key)<0){return;}try{var v=rw_state[key];if(v===undefined||v===null){localStorage.removeItem('rw:'+key);}else{localStorage.setItem('rw:'+key,JSON.stringify(v));}}catch(e){}}",
@@ -1410,7 +1643,7 @@ fun _render_runtime() -> String {
         "for(var k2 in old){if(!next[k2]&&old[k2].parentNode===box){box.removeChild(old[k2]);}}box._rwK=next;}",
     )
     out = out.concat(
-        "function rw_apply_one(i){var b=rw_binds[i];if(!b){return;}var kind=b[0];if(kind==='list'){rw_list(b);return;}var els=rw_all(b[1]);var val=rw_get(b[2]);for(var j=0;j<els.length;j++){var el=els[j];",
+        "function rw_apply_one(i){var b=rw_binds[i];if(!b){return;}var kind=b[0];if(kind==='list'){rw_list(b);return;}var els=rw_all(b[1]);var val=b[6]?rw_eval(b[6]):rw_get(b[2]);for(var j=0;j<els.length;j++){var el=els[j];",
     )
     out = out.concat(
         "if(kind==='text'){var t=val===undefined||val===null?'':String(val);if(el.textContent!==t){el.textContent=t;}}",
@@ -1489,10 +1722,22 @@ struct Binding {
     arg: String,
     filter_field: String,
     filter_value: String,
+    expr: String,
+    dep_keys: List<String>,
 }
 
 fun _binding(kind: String, selector: String, key: String, arg: String) -> Binding {
-    return Binding { kind, selector, key, arg, filter_field: "", filter_value: "" }
+    let dep_keys: List<String> = [_root_key(key)]
+    return Binding {
+        kind,
+        selector,
+        key,
+        arg,
+        filter_field: "",
+        filter_value: "",
+        expr: "",
+        dep_keys,
+    }
 }
 
 // Marker assignment. A node that declares bindings gets a data-rw-b marker, so
@@ -1532,6 +1777,8 @@ fun _collect_binds(node: Node, out: List<Binding>) {
                     arg: bind.arg,
                     filter_field: bind.filter_field,
                     filter_value: bind.filter_value,
+                    expr: bind.expr,
+                    dep_keys: bind.dep_keys,
                 },
             )
         }
@@ -1568,27 +1815,28 @@ fun _serialize_deps(bindings: List<Binding>) -> String {
     let first = true
     let i = 0
     while i < bindings.len() {
-        let key = _root_key(bindings[i].key)
-        if !_contains_str(seen, key) {
-            seen.push(key)
-            if !first {
-                out = out.concat(",")
-            }
-            out = out.concat(_js_string(key)).concat(":[")
-            let j = 0
-            let ifirst = true
-            while j < bindings.len() {
-                if _root_key(bindings[j].key) == key {
-                    if !ifirst {
-                        out = out.concat(",")
-                    }
-                    out = out.concat(j.to_string())
-                    ifirst = false
+        for key in bindings[i].dep_keys {
+            if !_contains_str(seen, key) {
+                seen.push(key)
+                if !first {
+                    out = out.concat(",")
                 }
-                j = j + 1
+                out = out.concat(_js_string(key)).concat(":[")
+                let j = 0
+                let ifirst = true
+                while j < bindings.len() {
+                    if _contains_str(bindings[j].dep_keys, key) {
+                        if !ifirst {
+                            out = out.concat(",")
+                        }
+                        out = out.concat(j.to_string())
+                        ifirst = false
+                    }
+                    j = j + 1
+                }
+                out = out.concat("]")
+                first = false
             }
-            out = out.concat("]")
-            first = false
         }
         i = i + 1
     }
@@ -1621,8 +1869,14 @@ fun _serialize_config(
         ).concat(",").concat(_js_string(binding.key)).concat(",").concat(_js_string(binding.arg)).concat(
             ",",
         ).concat(_js_string(binding.filter_field)).concat(",").concat(_js_string(binding.filter_value)).concat(
-            "]",
+            ",",
         )
+        if binding.expr == "" {
+            out = out.concat("null")
+        } else {
+            out = out.concat(binding.expr)
+        }
+        out = out.concat("]")
         bfirst = false
     }
     out = out.concat("],").concat(_js_string("p")).concat(":[")
@@ -1842,6 +2096,7 @@ impl Page {
         value: String,
     ) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
+            let dep_keys: List<String> = [_root_key(key)]
             self.bindings.push(
                 Binding {
                     kind: "list",
@@ -1850,6 +2105,8 @@ impl Page {
                     arg: template.render(),
                     filter_field: field,
                     filter_value: value,
+                    expr: "",
+                    dep_keys,
                 },
             )
         }

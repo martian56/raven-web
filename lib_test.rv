@@ -1,6 +1,6 @@
 import std/fs { exists, read }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, CssRule, Layout, Node, Page, Signal, Site, StaticFile, Stylesheet, Theme, request, signal }
+import "./lib" { Behavior, CssRule, Expr, Layout, Node, Page, Signal, Site, StaticFile, Stylesheet, Theme, request, signal }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -267,6 +267,52 @@ fun test_typed_signals_need_no_selectors_or_state_strings() {
     // The list filter survives the typed path.
     assert_true(js.contains("\"status\""))
     assert_true(js.contains("\"todo\""))
+}
+
+fun test_expressions_give_conditionals_and_derived_text() {
+    let tasks = signal("tasks", "")
+    let n = signal("n", "0")
+
+    // "if the list is empty, show this" and "1 task" vs "N tasks": neither was
+    // expressible before, because a behavior was a flat list of effects.
+    let empty_state = Node.p().child_text("Nothing yet").visible_when(Expr.is_empty(Expr.of(tasks)))
+    let counter = Node.span().text_expr(
+        Expr.ternary(
+            Expr.eq(Expr.of(n), Expr.int(1)),
+            Expr.text("1 task"),
+            Expr.concat(Expr.of(n), Expr.text(" tasks")),
+        ),
+    )
+    // An expression may read several signals; the binding must depend on both.
+    let both = Node.div().class_when(
+        Expr.and(Expr.gt(Expr.of(n), Expr.int(0)), Expr.not(Expr.is_empty(Expr.of(tasks)))),
+        "ready",
+    )
+
+    let page = Page.new("x", Node.main_node().child(empty_state).child(counter).child(both)).signal(
+        tasks,
+    ).signal(n)
+    let js = page.js()
+
+    // The expression is emitted as a data tree, never as evaluated code, so the
+    // no-eval safety model holds.
+    assert_true(js.contains("\"empty\""))
+    assert_true(js.contains("\"if\""))
+    assert_true(js.contains("\"cat\""))
+    assert_true(js.contains("\"and\""))
+    // No JS eval anywhere: the tree is interpreted, so no unsafe-eval is needed.
+    // (a naive "eval(" check would trip on rw_eval, the interpreter's own name)
+    assert_false(js.contains("new Function"))
+    assert_false(js.contains("window.eval"))
+    assert_false(js.contains("=eval("))
+
+    // The runtime interprets the tree.
+    assert_true(js.contains("function rw_eval(e)"))
+
+    // Dependencies are derived from the tree: the third binding reads both
+    // signals, so it is listed under each.
+    assert_true(js.contains("\"tasks\":[0,2]"))
+    assert_true(js.contains("\"n\":[1,2]"))
 }
 
 fun test_theme_tokens_light_and_dark() {

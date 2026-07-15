@@ -1,15 +1,16 @@
-// Typed-signal probe. Note what is absent: no CSS selector and no state string
-// is written anywhere below. Signals are declared once and passed by value, so
-// a typo is a compile error rather than a binding that silently targets nothing.
+// Typed-signal + expression probe. Note what is absent: no CSS selector and no
+// state string is written anywhere below, and no JavaScript.
 //
-// It also proves the update model: each row holds an uncontrolled <input>.
-//   "+"      writes unrelated state -> the list must not re-render at all
-//   "Reload" refetches the same rows -> rows are reused by key, so the typed
-//            text and focus survive
+// It proves three things:
+//   1. typed handles      - signals are declared once and passed by value
+//   2. targeted updates   - "+" writes unrelated state, so the list never
+//                           re-renders; a row's input keeps focus and text
+//   3. expressions        - an empty state and "1 task"/"N tasks" pluralization,
+//                           neither of which a flat effect list could express
 // (class names below exist only so the browser test can find things.)
 
 import std/io { println }
-import "../lib" { Behavior, Node, Page, Signal, StaticFile, Stylesheet, request, signal }
+import "../lib" { Behavior, Expr, Node, Page, Signal, StaticFile, Stylesheet, request, signal }
 
 fun rows_json() -> String {
     return "[{\"id\":1,\"title\":\"Alpha\"},{\"id\":2,\"title\":\"Beta\"},{\"id\":3,\"title\":\"Gamma\"}]"
@@ -29,15 +30,30 @@ fun build() -> Page {
     let count = signal("n", "0")
     let rows = signal("rows", "")
 
-    let body = Node.main_node().child(Node.h1().child_text("typed signal probe")).child(
+    // Derived text: singular vs plural, computed from the signal.
+    let summary = Node.span().class_name("summary").text_expr(
+        Expr.ternary(
+            Expr.eq(Expr.len(Expr.of(rows)), Expr.int(1)),
+            Expr.text("1 row"),
+            Expr.concat(Expr.len(Expr.of(rows)), Expr.text(" rows")),
+        ),
+    )
+    // Conditional: only while the list is empty.
+    let empty_state = Node.p().class_name("empty").child_text("No rows loaded").visible_when(
+        Expr.is_empty(Expr.of(rows)),
+    )
+
+    let body = Node.main_node().child(Node.h1().child_text("typed signal + expression probe")).child(
         Node.p().child(Node.span().child_text("unrelated counter: ")).child(
             Node.span().class_name("n").text_of(count),
         ),
     ).child(
         Node.div().child(
             Node.button("+").class_name("inc").on_click(Behavior.new().increment(count, 1)),
-        ).child(Node.button("Reload").class_name("reload").on_click(reload_of(rows))),
-    ).child(Node.ul().class_name("rows").each_of(rows, row()))
+        ).child(Node.button("Reload").class_name("reload").on_click(reload_of(rows))).child(
+            Node.button("Clear").class_name("clear").on_click(Behavior.new().clear(rows)),
+        ),
+    ).child(summary).child(empty_state).child(Node.ul().class_name("rows").each_of(rows, row()))
 
     return Page.new("probe", body).signal(count).signal(rows).file(
         StaticFile.new("rows.json", rows_json()),

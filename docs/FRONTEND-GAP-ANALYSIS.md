@@ -4,6 +4,28 @@ An honest assessment, 2026-07-14, written against raven-web v0.2.2 by the person
 who built it. The goal set for it is "replace React": best DX, best performance,
 professional designs, complex apps, reusable components.
 
+## Progress against this document
+
+Option A (grow the library, no compiler change) is the chosen path. Status:
+
+- **Tier 2.4/2.5 (destructive global re-render): fixed in v0.3.0.** The
+  dependency graph is resolved at build time, so a write updates only the
+  bindings that read that key, and lists reconcile by key and update rows in
+  place. Verified in a browser: an input inside a row keeps its value, focus,
+  and DOM identity across both an unrelated update and a full list refetch.
+- **Tier 3.6 (stringly-typed wiring): largely fixed in v0.4.0.** `signal()`
+  declares state once; nodes declare their own bindings (`text_of`,
+  `visible_if`, `each_of`, ...) and raven-web marks the element, so no selector
+  is written by hand. Behaviors and requests take the handle too. Remaining
+  strings are the ones raven-web genuinely cannot check: `Signal.at(field)` and
+  `{{field}}` both address JSON whose shape comes from a server.
+- **Tier 1.2 (no logic): partly fixed in v0.5.0.** `Expr` gives conditionals,
+  comparisons, boolean logic, arithmetic, `len`/`is_empty`, `concat`, and
+  `ternary`, so an empty state and singular/plural text are now expressible. It
+  is a DSL, not Raven: no arbitrary functions, no sharing domain logic with the
+  server. That limit is structural and only Option B removes it.
+- **Tier 1.1/1.3 (client components), Tier 4 (router, forms): still open.**
+
 ## 1. What raven-web actually is today
 
 Not a React alternative. Today it is:
