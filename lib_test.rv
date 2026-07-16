@@ -1,6 +1,6 @@
 import std/fs { exists, read }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, Ctx, CssRule, Expr, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, request, signal }
+import "./lib" { Behavior, Ctx, CssRule, Expr, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, query_param, request, signal }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -909,4 +909,132 @@ fun test_meta_names_allow_underscores() {
     // The executable names stay refused by name, not by character.
     let bad = Node.div().attr("on_click", "x").render()
     assert_false(bad.contains("on_click"))
+}
+
+fun test_alternates_render_and_validate() {
+    let page = Page.new("Alt", Node.div()).alternate("az", "https://example.com/").alternate(
+        "en",
+        "https://example.com/en/",
+    ).alternate("x-default", "https://example.com/").alternate("bad lang!", "https://x.com/").alternate(
+        "en",
+        "javascript:alert(1)",
+    )
+    let html = page.html()
+    assert_true(html.contains("hreflang=\"az\" href=\"https://example.com/\""))
+    assert_true(html.contains("hreflang=\"en\" href=\"https://example.com/en/\""))
+    assert_true(html.contains("hreflang=\"x-default\""))
+    assert_false(html.contains("bad lang"))
+    assert_false(html.contains("javascript:alert"))
+    assert_true(_has_warning(page.warnings(), "dropped alternate"))
+}
+
+fun test_sitemap_carries_lastmod() {
+    let site = Site.new("https://example.com").page("/", Page.new("Home", Node.div())).lastmod(
+        "2026-07-16",
+    ).page("/about", Page.new("About", Node.div()))
+    match site.write_static("target/raven-web-lastmod-output") {
+        Ok(_) -> {
+            match read("target/raven-web-lastmod-output/sitemap.xml") {
+                Ok(xml) -> {
+                    assert_true(xml.contains("<lastmod>2026-07-16</lastmod>"))
+                    // Only the dated route carries one.
+                    assert_true(xml.contains("<loc>https://example.com/about/</loc></url>"))
+                },
+                Err(_) -> assert_true(false),
+            }
+        },
+        Err(_) -> assert_true(false),
+    }
+}
+
+fun test_query_params_are_typed_state() {
+    let tab = query_param("tab")
+    assert_true(tab.key == "query")
+    assert_true(tab.path == "query.tab")
+    let router = Router.new().route("/", Node.div())
+    let via_router = router.query("tab")
+    assert_true(via_router.path == "query.tab")
+    // The runtime parses the query string into the reserved key on boot.
+    let js = Page.new("Q", Node.div().text_of(tab)).js()
+    assert_true(js.contains("rw_query"))
+    assert_true(js.contains("location.search"))
+}
+
+fun test_images_default_lazy_and_size() {
+    let plain = Node.image("/a.png", "A").render()
+    assert_true(plain.contains("loading=\"lazy\""))
+    assert_true(plain.contains("decoding=\"async\""))
+    let sized = Node.image_sized("/a.png", "A", 800, 400).render()
+    assert_true(sized.contains("width=\"800\""))
+    assert_true(sized.contains("height=\"400\""))
+    let hero = Node.image_sized("/hero.png", "Hero", 1600, 900).eager().render()
+    assert_true(hero.contains("loading=\"eager\""))
+    assert_true(hero.contains("fetchpriority=\"high\""))
+    let responsive = Node.image("/a.png", "A").srcset_add("/a-640.png", 640).srcset_add(
+        "/a-1280.png",
+        1280,
+    ).sizes("(max-width: 640px) 100vw, 640px").render()
+    assert_true(responsive.contains("srcset=\"/a-640.png 640w, /a-1280.png 1280w\""))
+    assert_true(responsive.contains("sizes="))
+    let bad = Node.image("/a.png", "A").srcset_add("javascript:alert(1)", 640)
+    assert_true(_has_warning(bad.warnings, "srcset"))
+}
+
+fun test_css_minifier_is_conservative() {
+    let css = ".a {  color: red;  }\n/* gone */\n.a :hover { content: \"a  b\"; }\n@media (min-width: 920px) { .b > .c { margin: calc(100% - 2px); } }"
+    let page = Page.new("M", Node.div()).with_css(css).optimize()
+    let out = page.css()
+    assert_false(out.contains("gone"))
+    assert_true(out.contains(".a{color:red}"))
+    // Space before a colon is a descendant selector and must survive.
+    assert_true(out.contains(".a :hover"))
+    // Quoted strings keep their internal spacing.
+    assert_true(out.contains("\"a  b\""))
+    // calc() keeps the spaces its operators require.
+    assert_true(out.contains("calc(100% - 2px)"))
+    assert_true(out.contains("@media (min-width:920px)"))
+}
+
+fun test_optimize_fingerprints_and_cleans_stale() {
+    let first = Page.new("F", Node.div()).with_css(".a { color: red; }").optimize()
+    let css_name = first.css_asset_name()
+    assert_true(css_name.starts_with("styles."))
+    assert_true(css_name.ends_with(".css"))
+    assert_true(css_name.length() == 19)
+    assert_true(first.html().contains(css_name))
+    assert_true(first.html().contains(first.js_asset_name()))
+    match first.write_static("target/raven-web-fp-output") {
+        Ok(out) -> assert_true(out.contains(css_name)),
+        Err(_) -> assert_true(false),
+    }
+    // A content change renames the asset and removes the old one.
+    let second = Page.new("F", Node.div()).with_css(".a { color: blue; }").optimize()
+    let renamed = second.css_asset_name()
+    assert_false(renamed == css_name)
+    match second.write_static("target/raven-web-fp-output") {
+        Ok(_) -> {
+            assert_false(exists("target/raven-web-fp-output/".concat(css_name)))
+            assert_true(exists("target/raven-web-fp-output/".concat(renamed)))
+        },
+        Err(_) -> assert_true(false),
+    }
+    // Without optimize the names stay fixed.
+    let plain = Page.new("F", Node.div())
+    assert_true(plain.css_asset_name() == "styles.css")
+    assert_true(plain.js_asset_name() == "app.js")
+}
+
+fun test_base_path_prefixes_assets_and_config() {
+    let page = Page.new("B", Node.div()).base_path("/repo")
+    let html = page.html()
+    assert_true(html.contains("href=\"/repo/styles.css\""))
+    assert_true(html.contains("src=\"/repo/app.js\""))
+    assert_true(page.js().contains("\"z\":\"/repo\""))
+    // The runtime strips and restores the prefix around routing.
+    assert_true(page.js().contains("rw_base"))
+    // Root base means no prefix, and an invalid base is dropped loudly.
+    let root = Page.new("B", Node.div()).base_path("/")
+    assert_true(root.html().contains("href=\"styles.css\""))
+    let bad = Page.new("B", Node.div()).base_path("no space allowed here?")
+    assert_true(_has_warning(bad.warnings(), "base_path"))
 }

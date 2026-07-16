@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.13.1"
+"github.com/martian56/raven-web" = "v0.14.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -462,6 +462,27 @@ files added by `css_file` or `file`. Paths are validated as safe relative paths,
 HTML is escaped, executable-looking attributes and unsafe URLs are rejected, and
 all interaction code is structured data interpreted by a fixed runtime rather
 than string-injected script.
+
+## Production output
+
+- `page.optimize()` minifies the emitted CSS and content-hashes the asset
+  names (`styles.7bdddcdb.css`, `app.42c4b729.js`), so far-future cache
+  headers can never serve a stale deploy; older hashed copies are removed on
+  rebuild. Off by default, so dev output keeps stable names.
+- `page.base_path("/repo")` makes the site work under a subpath host (a
+  GitHub Pages project site): asset references become absolute under the
+  prefix, and the client router matches, navigates, and rewrites route-link
+  hrefs beneath it.
+- `Node.image` is `loading="lazy" decoding="async"` by default. `image_sized`
+  adds the intrinsic width and height that prevent layout shift, `eager()`
+  opts a hero image out of lazy loading and raises its fetch priority, and
+  `srcset_add(url, width)` plus `sizes(...)` build responsive candidates.
+- `page.alternate("en", url)` emits hreflang alternate links for
+  multilingual sites, and `site.page(...).lastmod("2026-07-16")` dates the
+  sitemap entry.
+- `router.query("tab")` (or `query_param("tab")` without a router) reads
+  `?tab=` as a signal under the reserved `query` key; the runtime re-parses
+  it on load and on every navigation.
 
 ## Examples
 

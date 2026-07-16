@@ -1,9 +1,10 @@
 // raven-web: safe browser artifacts for Raven.
 
 import std/json { JsonValue, stringify }
-import std/fs { create_dir_all, dirname, join, write }
+import std/fs { create_dir_all, dirname, join, list_dir, remove_file, write }
 import std/error { Error }
 import std/io { println }
+import std/hash { fnv1a }
 
 struct Attribute {
     name: String,
@@ -710,8 +711,28 @@ impl Node {
         return _node("a").href(url).child_text(label)
     }
 
+    // Images are lazy and async by default, the class norm; a hero image
+    // should call eager() to opt out and take fetch priority instead.
     fun image(url: String, alt: String) -> Node {
-        return _node("img").src(url).attr("alt", alt)
+        return _node("img").src(url).attr("alt", alt).attr("loading", "lazy").attr(
+            "decoding",
+            "async",
+        )
+    }
+
+    // image with intrinsic dimensions, which is what prevents layout shift:
+    // the browser reserves the box before the file arrives.
+    fun image_sized(url: String, alt: String, width: Int, height: Int) -> Node {
+        let out = Node.image(url, alt)
+        if width > 0 && height > 0 {
+            return out.attr("width", width.to_string()).attr("height", height.to_string())
+        }
+        out.warnings.push(
+            "dropped image dimensions on ".concat(_quote_word(url)).concat(
+                ": width and height must be positive",
+            ),
+        )
+        return out
     }
 
     fun figure() -> Node {
@@ -1002,6 +1023,44 @@ impl Node {
     fun child_text(self, value: String) -> Node {
         self.kids.push(Node.text(value))
         return self
+    }
+
+    // The above-the-fold opt-out: load now, and ahead of other requests.
+    fun eager(self) -> Node {
+        return self.attr("loading", "eager").attr("fetchpriority", "high")
+    }
+
+    // Add one candidate to the srcset: srcset_add(url, 640) appends
+    // "url 640w". Call once per variant, then set sizes().
+    fun srcset_add(self, url: String, width: Int) -> Node {
+        if !_safe_url(url) {
+            self.warnings.push(
+                "dropped srcset candidate on ".concat(_describe_node(self)).concat(": unsafe URL ").concat(
+                    _quote_word(url),
+                ),
+            )
+            return self
+        }
+        if width <= 0 {
+            self.warnings.push(
+                "dropped srcset candidate on ".concat(_describe_node(self)).concat(
+                    ": width must be positive",
+                ),
+            )
+            return self
+        }
+        let entry = url.concat(" ").concat(width.to_string()).concat("w")
+        for existing in self.attrs {
+            if existing.name == "srcset" {
+                existing.value = existing.value.concat(", ").concat(entry)
+                return self
+            }
+        }
+        return self.attr("srcset", entry)
+    }
+
+    fun sizes(self, value: String) -> Node {
+        return self.attr("sizes", value)
     }
 
     fun href(self, url: String) -> Node {
@@ -2132,7 +2191,7 @@ fun _serialize_behavior(behavior: Behavior) -> String {
 fun _render_runtime() -> String {
     let out = "(function(){'use strict';"
     out = out.concat(
-        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];var rw_deps=rw_init.d||{};",
+        "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];var rw_deps=rw_init.d||{};var rw_base=rw_init.z||'';",
     )
     out = out.concat(
         // raven-web's own marks are unique and live as long as the page, so
@@ -2269,7 +2328,13 @@ fun _render_runtime() -> String {
     out = out.concat("function rw_path(p){var s=String(p||'/');var i=s.indexOf('?');")
     out = out.concat("if(i>=0){s=s.slice(0,i);}i=s.indexOf('#');if(i>=0){s=s.slice(0,i);}")
     out = out.concat("while(s.length>1&&s.charAt(s.length-1)==='/'){s=s.slice(0,-1);}")
-    out = out.concat("return s.charAt(0)==='/'?s:'/'+s;}")
+    out = out.concat("s=s.charAt(0)==='/'?s:'/'+s;")
+    // Under a base path the router matches and navigates in site-local
+    // coordinates: the prefix is stripped on the way in and rw_go adds it
+    // back on the way out.
+    out = out.concat("if(rw_base&&s.indexOf(rw_base)===0){s=s.slice(rw_base.length);")
+    out = out.concat("if(!s){s='/';}if(s.charAt(0)!=='/'){s='/'+s;}}")
+    out = out.concat("return s;}")
     out = out.concat("function rw_match(pattern,path){if(pattern==='*'){return {};}")
     out = out.concat("var pp=pattern.split('/'),ap=path.split('/');")
     out = out.concat("if(pp.length!==ap.length){return null;}var out={};")
@@ -2282,7 +2347,17 @@ fun _render_runtime() -> String {
     out = out.concat("}else if(seg!==ap[i]){return null;}}return out;}")
     // Declaration order decides which of two matching patterns wins, and the
     // fallback is only used when nothing else matched.
-    out = out.concat("function rw_route(){var els=document.querySelectorAll('[data-rw-route]');")
+    // The query string is state like route params are: parsed on every
+    // navigation into the reserved key 'query', even on pages with no router.
+    out = out.concat("function rw_query(){var q={};var qs=String(location.search||'');")
+    out = out.concat("if(qs.charAt(0)==='?'){qs=qs.slice(1);}if(!qs){return q;}")
+    out = out.concat("var parts=qs.split('&');for(var i=0;i<parts.length;i++){")
+    out = out.concat("var kv=parts[i].split('=');if(!kv[0]){continue;}var k,v;")
+    out = out.concat("try{k=decodeURIComponent(kv[0]);}catch(e){k=kv[0];}")
+    out = out.concat("var raw=kv.length>1?kv.slice(1).join('='):'';raw=raw.split('+').join(' ');")
+    out = out.concat("try{v=decodeURIComponent(raw);}catch(e){v=raw;}q[k]=v;}return q;}")
+    out = out.concat("function rw_route(){rw_setstate('query',rw_query());")
+    out = out.concat("var els=document.querySelectorAll('[data-rw-route]');")
     out = out.concat("if(!els.length){return;}var path=rw_path(location.pathname);")
     out = out.concat("var hit=null,params=null,fallback=null;")
     out = out.concat("for(var i=0;i<els.length;i++){var pat=els[i].getAttribute('data-rw-route');")
@@ -2300,7 +2375,7 @@ fun _render_runtime() -> String {
     // would interrupt it.
     out = out.concat("if(rw_booted&&hit&&hit!==rw_seen){hit.focus();}rw_seen=hit;}")
     out = out.concat(
-        "function rw_go(path){var to=rw_path(path);if(to!==rw_path(location.pathname)){history.pushState({},'',to);}rw_route();}",
+        "function rw_go(path){var to=rw_path(path);if(to!==rw_path(location.pathname)){history.pushState({},'',rw_base+to);}rw_route();}",
     )
     out = out.concat(
         "function rw_dispatch(ev,name){var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-'+name+']');if(!el){return;}var raw=el.getAttribute('data-rw-'+name);if(!raw){return;}var spec;try{spec=JSON.parse(raw);}catch(e){return;}if(spec.p){ev.preventDefault();}rw_run(spec.e||[]);}",
@@ -2334,6 +2409,12 @@ fun _render_runtime() -> String {
     out = out.concat("if(!el){return;}var to=el.getAttribute('data-rw-link');if(!to){return;}")
     out = out.concat("ev.preventDefault();rw_go(to);});")
     out = out.concat("window.addEventListener('popstate',function(){rw_route();});")
+    // Route links are emitted in site-local coordinates; under a base path
+    // their real hrefs gain the prefix so open-in-new-tab works too.
+    out = out.concat("if(rw_base){var rwl=document.querySelectorAll('[data-rw-link]');")
+    out = out.concat(
+        "for(var q=0;q<rwl.length;q++){var lv=rwl[q].getAttribute('data-rw-link');if(lv){rwl[q].setAttribute('href',rw_base+lv);}}}",
+    )
     out = out.concat("rw_load();rw_route();rw_apply();rw_run(rw_onload);rw_booted=true;")
     return out.concat("})();")
 }
@@ -2491,6 +2572,7 @@ fun _serialize_config(
     bindings: List<Binding>,
     persisted: List<String>,
     load_effects: List<Effect>,
+    base: String,
 ) -> String {
     let out = "{".concat(_js_string("s")).concat(":{")
     let first = true
@@ -2540,6 +2622,7 @@ fun _serialize_config(
         _serialize_effects(load_effects),
     )
     out = out.concat(",").concat(_js_string("d")).concat(":").concat(_serialize_deps(bindings))
+    out = out.concat(",").concat(_js_string("z")).concat(":").concat(_js_string(base))
     return out.concat("}")
 }
 
@@ -2564,8 +2647,17 @@ struct Page {
     meta_props: List<Attribute>,
     preconnects: List<Attribute>,
     structured: List<String>,
+    // hreflang alternates: name is the language code, value is the URL.
+    alternates: List<Attribute>,
     canonical_url: String,
     theme_color_value: String,
+    // With optimize set, the emitted CSS is minified and styles.css/app.js
+    // carry a content hash in their names, so far-future caching is safe.
+    optimize_mode: Bool,
+    // A deployment prefix ("/repo" on a project page). Asset references
+    // become absolute under it and the client router works in site-local
+    // paths beneath it.
+    base: String,
     // Page-level dropped inputs; warnings() adds the tree's and the styles'.
     page_warnings: List<String>,
     // With strict set, write_static refuses to write while any warning exists.
@@ -2644,10 +2736,105 @@ fun _escape_json_for_script(json: String) -> String {
     return json.replace("<", bs.concat("u003c")).replace(">", bs.concat("u003e"))
 }
 
+// An eight-hex-digit content fingerprint. Not cryptographic; it only has to
+// change when the content changes, so caches can be immutable.
+fun _fingerprint(content: String) -> String {
+    let h = fnv1a(content)
+    if h < 0 {
+        h = 0 - h
+    }
+    let digits = "0123456789abcdef"
+    let out = ""
+    let i = 0
+    while i < 8 {
+        let d = h % 16
+        out = digits.substring(d, d + 1).concat(out)
+        h = h / 16
+        i += 1
+    }
+    return out
+}
+
+// A conservative CSS minifier: strips comments, collapses whitespace runs,
+// and removes spaces around structural punctuation. Quoted strings pass
+// through untouched. Space before a colon is kept on purpose: ".a :hover"
+// and ".a:hover" are different selectors.
+fun _minify_css(css: String) -> String {
+    let out = ""
+    let i = 0
+    let n = css.length()
+    let quote = 0
+    let pending = false
+    while i < n {
+        let b = css.byte_at(i)
+        if quote != 0 {
+            out = out.concat(css.substring(i, i + 1))
+            if b == quote {
+                quote = 0
+            }
+            i += 1
+        } else if b == 34 || b == 39 {
+            if pending && out.length() > 0 {
+                out = out.concat(" ")
+            }
+            pending = false
+            quote = b
+            out = out.concat(css.substring(i, i + 1))
+            i += 1
+        } else if b == 47 && i + 1 < n && css.byte_at(i + 1) == 42 {
+            i += 2
+            while i + 1 < n && !(css.byte_at(i) == 42 && css.byte_at(i + 1) == 47) {
+                i += 1
+            }
+            i += 2
+        } else if b == 32 || b == 9 || b == 10 || b == 13 {
+            pending = true
+            i += 1
+        } else {
+            let eats_before = b == 123 || b == 125 || b == 59 || b == 44 || b == 62
+            if pending && !eats_before && out.length() > 0 {
+                let last = out.byte_at(out.length() - 1)
+                let eats_after = last == 123 || last == 125 || last == 59 || last == 44 || last == 62 || last == 58
+                if !eats_after {
+                    out = out.concat(" ")
+                }
+            }
+            pending = false
+            if b == 125 && out.length() > 0 && out.byte_at(out.length() - 1) == 59 {
+                out = out.substring(0, out.length() - 1)
+            }
+            out = out.concat(css.substring(i, i + 1))
+            i += 1
+        }
+    }
+    return out.trim()
+}
+
+// A language tag ("az", "en-US") or the reserved "x-default".
+fun _valid_hreflang(value: String) -> Bool {
+    return value == "x-default" || _valid_language(value)
+}
+
 fun _warn_binding(method: String, selector: String, key: String) -> String {
     return "dropped ".concat(method).concat(": invalid selector or key (selector ").concat(
         _quote_word(selector),
     ).concat(", key ").concat(_quote_word(key)).concat(")")
+}
+
+// Remove earlier fingerprinted copies of an emitted asset: files in `dir`
+// matching prefix and suffix that are not the current name. Only raven-web's
+// own two asset names are managed; author files are never touched.
+fun _remove_stale_assets(dir: String, prefix: String, suffix: String, current: String) {
+    match list_dir(dir) {
+        Ok(entries) -> {
+            for entry in entries {
+                if entry != current && entry.starts_with(prefix) && entry.ends_with(suffix) {
+                    let _ = remove_file(join(dir, entry))
+                }
+            }
+        },
+        Err(_) -> {},
+    }
 }
 
 fun _valid_language(value: String) -> Bool {
@@ -2673,6 +2860,7 @@ impl Page {
         let meta_props: List<Attribute> = []
         let preconnects: List<Attribute> = []
         let structured: List<String> = []
+        let alternates: List<Attribute> = []
         return Page {
             title,
             root,
@@ -2691,11 +2879,54 @@ impl Page {
             meta_props,
             preconnects,
             structured,
+            alternates,
             canonical_url: "",
             theme_color_value: "",
+            optimize_mode: false,
+            base: "",
             page_warnings,
             strict_mode: false,
         }
+    }
+
+    // Production output: minified CSS, and content-hashed names for
+    // styles.css and app.js so deploys can never serve a stale asset.
+    fun optimize(self) -> Page {
+        self.optimize_mode = true
+        return self
+    }
+
+    // Deploying under a subpath (https://user.github.io/repo/) needs the
+    // prefix declared, or the SPA fallback and deep links resolve assets
+    // against the wrong directory.
+    fun base_path(self, path: String) -> Page {
+        if !_valid_route_pattern(path) {
+            self.page_warnings.push("dropped base_path: invalid path ".concat(_quote_word(path)))
+            return self
+        }
+        let clean = _normalize_path(path)
+        self.base = if clean == "/" {
+            ""
+        } else {
+            clean
+        }
+        return self
+    }
+
+    // The emitted asset names: fixed by default, content-hashed under
+    // optimize().
+    fun css_asset_name(self) -> String {
+        if !self.optimize_mode {
+            return "styles.css"
+        }
+        return "styles.".concat(_fingerprint(self.css())).concat(".css")
+    }
+
+    fun js_asset_name(self) -> String {
+        if !self.optimize_mode {
+            return "app.js"
+        }
+        return "app.".concat(_fingerprint(self.js())).concat(".js")
     }
 
     // A named meta tag: meta("robots", "index, follow"). The name is checked
@@ -2719,6 +2950,23 @@ impl Page {
                 "dropped meta_property: invalid property ".concat(_quote_word(property)),
             )
         }
+        return self
+    }
+
+    // An hreflang alternate for this page's other-language versions:
+    // alternate("en", "https://example.com/en/"). Use "x-default" for the
+    // fallback. Multilingual sites need one per language plus a self
+    // reference, or search engines pick a language arbitrarily.
+    fun alternate(self, hreflang: String, url: String) -> Page {
+        if !_valid_hreflang(hreflang) {
+            self.page_warnings.push("dropped alternate: invalid hreflang ".concat(_quote_word(hreflang)))
+            return self
+        }
+        if !_safe_url(url) {
+            self.page_warnings.push("dropped alternate: unsafe URL ".concat(_quote_word(url)))
+            return self
+        }
+        self.alternates.push(Attribute { name: hreflang, value: url })
         return self
     }
 
@@ -3045,9 +3293,9 @@ impl Page {
             "width=device-width, initial-scale=1",
         ).concat(q).concat("><title>").concat(_escape_html(self.title)).concat("</title><link rel=").concat(
             q,
-        ).concat("stylesheet").concat(q).concat(" href=").concat(q).concat("styles.css").concat(q).concat(
-            ">",
-        )
+        ).concat("stylesheet").concat(q).concat(" href=").concat(q).concat(
+            _escape_html(self._ref(self.css_asset_name())),
+        ).concat(q).concat(">")
         if self.description.length() > 0 {
             out = out.concat("<meta name=").concat(q).concat("description").concat(q).concat(" content=").concat(
                 q,
@@ -3087,6 +3335,13 @@ impl Page {
                 q,
             ).concat(_escape_html(self.canonical_url)).concat(q).concat(">")
         }
+        for alt in self.alternates {
+            out = out.concat("<link rel=").concat(q).concat("alternate").concat(q).concat(" hreflang=").concat(
+                q,
+            ).concat(_escape_html(alt.name)).concat(q).concat(" href=").concat(q).concat(
+                _escape_html(alt.value),
+            ).concat(q).concat(">")
+        }
         if self.theme_color_value != "" {
             out = out.concat("<meta name=").concat(q).concat("theme-color").concat(q).concat(" content=").concat(
                 q,
@@ -3099,17 +3354,38 @@ impl Page {
         }
         return out.concat("</head><body>").concat(self.root.render()).concat("<script src=").concat(
             q,
-        ).concat("app.js").concat(q).concat(" defer></script></body></html>")
+        ).concat(_escape_html(self._ref(self.js_asset_name()))).concat(q).concat(
+            " defer></script></body></html>",
+        )
     }
 
     fun css(self) -> String {
+        if self.optimize_mode {
+            return _minify_css(self.styles.render())
+        }
         return self.styles.render()
     }
 
     fun js(self) -> String {
         return "window.RW_INIT=".concat(
-            _serialize_config(self.state, self.all_bindings(), self.persisted, self.load_effects),
+            _serialize_config(
+                self.state,
+                self.all_bindings(),
+                self.persisted,
+                self.load_effects,
+                self.base,
+            ),
         ).concat(";").concat(_render_runtime())
+    }
+
+    // An emitted asset reference: relative by default (so pages in
+    // subdirectories work), absolute under a base path (so the SPA fallback
+    // resolves them from any URL).
+    fun _ref(self, name: String) -> String {
+        if self.base == "" {
+            return name
+        }
+        return self.base.concat("/").concat(name)
     }
 
     fun write_static(self, dir: String) -> Result<StaticOutput, Error> {
@@ -3131,12 +3407,21 @@ impl Page {
         }
         let _created = create_dir_all(dir)?
         let paths: List<String> = []
+        let css_name = self.css_asset_name()
+        let js_name = self.js_asset_name()
+        // Under optimize the names carry a content hash, so earlier hashes
+        // in the same directory are dead files: remove them, or dev rebuilds
+        // accumulate one stale pair per edit.
+        if self.optimize_mode {
+            _remove_stale_assets(dir, "styles.", ".css", css_name)
+            _remove_stale_assets(dir, "app.", ".js", js_name)
+        }
         let _html = write(join(dir, "index.html"), self.html())?
         paths.push("index.html")
-        let _css = write(join(dir, "styles.css"), self.css())?
-        paths.push("styles.css")
-        let _js = write(join(dir, "app.js"), self.js())?
-        paths.push("app.js")
+        let _css = write(join(dir, css_name), self.css())?
+        paths.push(css_name)
+        let _js = write(join(dir, js_name), self.js())?
+        paths.push(js_name)
         // A client router owns paths the host has no file for. Most static
         // hosts serve 404.html for an unknown path, so shipping the app there
         // makes a deep link resolve instead of dying.
@@ -3215,6 +3500,8 @@ impl Layout {
 struct Route {
     path: String,
     page: Page,
+    // W3C date ("2026-07-16") for the sitemap's lastmod; empty means omitted.
+    lastmod: String,
 }
 
 struct SiteOutput {
@@ -3276,6 +3563,24 @@ fun _join_url(base: String, path: String) -> String {
     return b.concat("/").concat(path).concat("/")
 }
 
+// A W3C sitemap date: digits and hyphens shaped like 2026-07-16 (a full
+// datetime also passes: digits, hyphens, colons, T, Z, plus, dot).
+fun _valid_w3c_date(value: String) -> Bool {
+    if value.length() < 10 {
+        return false
+    }
+    let i = 0
+    while i < value.length() {
+        let b = value.byte_at(i)
+        let ok = (b >= 48 && b <= 57) || b == 45 || b == 58 || b == 84 || b == 90 || b == 43 || b == 46
+        if !ok {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
 fun _default_not_found() -> Page {
     return Page.new(
         "Page not found",
@@ -3295,8 +3600,12 @@ fun _sitemap(base_url: String, routes: List<Route>) -> String {
     ).concat(q).concat(">")
     for route in routes {
         out = out.concat("<url><loc>").concat(_escape_html(_join_url(base_url, route.path))).concat(
-            "</loc></url>",
+            "</loc>",
         )
+        if route.lastmod != "" {
+            out = out.concat("<lastmod>").concat(_escape_html(route.lastmod)).concat("</lastmod>")
+        }
+        out = out.concat("</url>")
     }
     return out.concat("</urlset>")
 }
@@ -3308,7 +3617,21 @@ impl Site {
     }
 
     fun page(self, path: String, page: Page) -> Site {
-        self.routes.push(Route { path: _normalize_route(path), page })
+        self.routes.push(Route { path: _normalize_route(path), page, lastmod: "" })
+        return self
+    }
+
+    // Stamp the route added most recently with a last-modified date for the
+    // sitemap: site.page("/blog/hello", post).lastmod("2026-07-16").
+    fun lastmod(self, date: String) -> Site {
+        if self.routes.len() == 0 {
+            return self
+        }
+        if !_valid_w3c_date(date) {
+            return self
+        }
+        let last = self.routes.get(self.routes.len() - 1)
+        last.lastmod = date
         return self
     }
 
@@ -3433,6 +3756,11 @@ impl Router {
         return Signal { key: "route", path: "route.".concat(name), initial: "", raw: false }
     }
 
+    // A query-string parameter (?tab=general), read like any other signal.
+    fun query(self, name: String) -> Signal {
+        return query_param(name)
+    }
+
     fun route_count(self) -> Int {
         return self.routes.len()
     }
@@ -3476,6 +3804,14 @@ fun _guard_json(key: String, to: String) -> String {
     return "{".concat(_js_string("k")).concat(":").concat(_js_string(key)).concat(",").concat(
         _js_string("to"),
     ).concat(":").concat(_js_string(to)).concat("}")
+}
+
+// A query-string parameter as a typed signal. Query values live under the
+// reserved state key "query", parsed by the runtime on load and on every
+// navigation, so bindings react to them like any other state. Works with or
+// without a Router.
+fun query_param(name: String) -> Signal {
+    return Signal { key: "query", path: "query.".concat(name), initial: "", raw: false }
 }
 
 // Router paths keep their leading slash (they are matched against
