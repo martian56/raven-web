@@ -9,7 +9,7 @@ import std/http { Server, Request, Response }
 import std/fs { create_dir_all, read, walk, exists, is_file, join, dirname }
 import std/time { now_millis, sleep_millis }
 import std/io { println }
-import std/env { args, exit }
+import std/env { args, exit, os_name }
 import std/process { Output, run }
 
 // Shared reload state. The watcher bumps the token and records the last build
@@ -430,11 +430,94 @@ fun _watch_and_recompile(
     }
 }
 
+// The package name out of an rv.toml body: the first `name = "..."` line.
+// Split out so it is testable without a file.
+fun package_name_from(toml: String) -> Option<String> {
+    for line in toml.split("\n") {
+        let clean = line.trim()
+        if clean.starts_with("name") {
+            let rest = clean.substring(4, clean.length()).trim()
+            if rest.starts_with("=") {
+                let value = _name_token(rest.substring(1, rest.length()))
+                if value != "" {
+                    return Some(value)
+                }
+            }
+        }
+    }
+    return None
+}
+
+// The name characters of a TOML string value, quotes and spaces dropped.
+// Package names are [A-Za-z0-9._-], so keeping only those characters strips
+// the quotes without naming the quote character (Raven string escaping makes
+// that awkward).
+fun _name_token(value: String) -> String {
+    let out = ""
+    let i = 0
+    while i < value.length() {
+        let b = value.byte_at(i)
+        if (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 45 || b == 95 || b == 46 {
+            out = out.concat(value.substring(i, i + 1))
+        }
+        i += 1
+    }
+    return out
+}
+
+// Recompile a package project through rvpm, which resolves dependencies the
+// single-file compiler does not. Returns the generator's stdout.
+fun _recompile_package(name: String) -> Result<String, String> {
+    return match run("rvpm", ["build"]) {
+        Err(error) -> Err("could not run rvpm: ".concat(error.message)),
+        Ok(compile) -> {
+            if !compile.success() {
+                Err(_output_text(compile))
+            } else {
+                let suffix = if os_name() == "windows" {
+                    ".exe"
+                } else {
+                    ""
+                }
+                let exe = join(join("target", "raven-out"), name.concat(suffix))
+                match run(exe, ["build"]) {
+                    Err(error) -> Err("could not run the rebuilt generator: ".concat(error.message)),
+                    Ok(regen) -> {
+                        if !regen.success() {
+                            Err(_output_text(regen))
+                        } else {
+                            Ok(regen.stdout)
+                        }
+                    },
+                }
+            }
+        },
+    }
+}
+
 // Compile `entry` into a scratch executable and run it with `build`. Returns
 // the generator's stdout on success and the compiler's or generator's output
 // on failure. The scratch name is fixed and lives under target, which is
-// excluded from watching.
+// excluded from watching. A project with an rv.toml is a package: it is
+// recompiled through rvpm instead, because only package mode resolves rvpm
+// dependencies.
 fun _recompile(entry: String) -> Result<String, String> {
+    // Package mode needs an application package: an rv.toml alone may belong
+    // to a library (raven-web's own repo is one), and rvpm only builds an
+    // executable when src/main.rv exists.
+    if is_file("rv.toml") && is_file(join("src", "main.rv")) {
+        match read("rv.toml") {
+            Ok(toml) -> {
+                match package_name_from(toml) {
+                    Some(name) -> {
+                        return _recompile_package(name)
+                    },
+                    None -> {},
+                }
+            },
+            Err(_) -> {},
+        }
+    }
     let _dir = create_dir_all("target")
     let scratch = join("target", ".rw-dev.exe")
     return match run("raven", ["build", entry, "-o", scratch]) {

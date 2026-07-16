@@ -1,5 +1,12 @@
 import std/test { assert_false, assert_true }
-import "./dev" { Reloader, command_from, excluded, inject_reload, resolve_path, status_body }
+import std/json { JsonValue, stringify }
+import "./dev" { Reloader, command_from, excluded, inject_reload, package_name_from, resolve_path, status_body }
+
+// A double-quoted copy of `value`, via the JSON writer, because a literal
+// quote character is awkward in a Raven string.
+fun _q(value: String) -> String {
+    return stringify(JsonValue.Str(value))
+}
 
 fun test_reload_injected_before_body() {
     let out = inject_reload("<html><body><h1>Hi</h1></body></html>", "/__rw_reload")
@@ -70,6 +77,20 @@ fun test_resolve_path_maps_directories_and_guards_traversal() {
     }
     // A traversal attempt is rejected outright.
     match resolve_path("dist", "/../secret") {
+        Some(_) -> assert_true(false),
+        None -> assert_true(true),
+    }
+}
+
+fun test_package_name_parses_out_of_rv_toml() {
+    let toml = "[package]\nname = ".concat(_q("raven-web-site")).concat("\nversion = ").concat(
+        _q("0.1.0"),
+    ).concat("\n")
+    match package_name_from(toml) {
+        Some(name) -> assert_true(name == "raven-web-site"),
+        None -> assert_true(false),
+    }
+    match package_name_from("[package]\nversion = 1\n") {
         Some(_) -> assert_true(false),
         None -> assert_true(true),
     }
