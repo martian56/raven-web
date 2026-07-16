@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.16.0"
+"github.com/martian56/raven-web" = "v0.17.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -167,6 +167,11 @@ Polish for real interfaces:
 - `Page.every(5000, behavior)` runs a behavior on an interval, starting
   after boot: a carousel advance, a clock, or a polling `fetch` that keeps a
   list fresh. Intervals under 100 ms are refused.
+- `Node.visible_if(sig).transition()` animates a show/hide instead of
+  snapping it: the element keeps its box and toggles the `rw-hidden` class,
+  so author CSS owns the animation. `transition_styles()` is a
+  reduced-motion-safe fade default; a visitor who asked for less motion gets
+  an instant swap.
 
 ## Client state and bindings
 
@@ -506,6 +511,11 @@ page.file(StaticFile.new("feed.xml", atom_feed(title, url, feed_url, updated, en
   newest first; `chunks(items, size)` splits for pagination.
 - `atom_feed(...)` builds an Atom feed from the same ISO dates frontmatter
   uses, escaped like everything else.
+- Fenced code blocks are syntax-highlighted at build time (raven, rust,
+  js/ts, go, python, c/c++/java, bash) into classed spans, no client JS;
+  `highlight(code, lang)` does the same for a standalone snippet, and
+  `syntax_styles()` is a dark token theme you can override. Highlighting
+  runs through the escaping builders, so it can never inject markup.
 
 `examples/blog.rv` is the whole pattern: a directory of markdown becomes a
 site with an index, clean post URLs, a dated sitemap, and a feed.

@@ -1200,6 +1200,15 @@ impl Node {
         return self
     }
 
+    // Animate this element's visibility instead of snapping it. The element
+    // keeps its box and toggles the `rw-hidden` class, so author CSS owns the
+    // transition (opacity, transform). Pair with transition_styles() for a
+    // reduced-motion-safe default, or write your own rule against
+    // `[data-rw-trans].rw-hidden`. Best for fades, not layout collapse.
+    fun transition(self) -> Node {
+        return self.attr("data-rw-trans", "")
+    }
+
     fun hidden_if(self, source: Signal) -> Node {
         self.binds.push(_node_bind("hidden", source.path, ""))
         return self
@@ -2295,7 +2304,15 @@ fun _render_runtime() -> String {
     out = out.concat(
         "function rw_all(s){if(rw_cn[s]!==undefined){return rw_cn[s];}try{var found=document.querySelectorAll(s);if(rw_mark(s)){rw_cn[s]=found;}return found;}catch(e){console.error('raven-web: bad selector',s);return [];}}",
     )
-    out = out.concat("function rw_vis(el,on){if(el){el.style.display=on?'':'none';}}")
+    // A transition element keeps its box and toggles the rw-hidden class, so
+    // author CSS can animate opacity or transform; a plain element flips
+    // display. rw_shown reads the current state through the same split.
+    out = out.concat(
+        "function rw_vis(el,on){if(!el){return;}if(el.getAttribute&&el.getAttribute('data-rw-trans')!==null){if(on){el.classList.remove('rw-hidden');}else{el.classList.add('rw-hidden');}}else{el.style.display=on?'':'none';}}",
+    )
+    out = out.concat(
+        "function rw_shown(el){if(el.getAttribute&&el.getAttribute('data-rw-trans')!==null){return !el.classList.contains('rw-hidden');}return getComputedStyle(el).display!=='none';}",
+    )
     out = out.concat("function rw_val(el){return el.value!==undefined?el.value:el.textContent;}")
     out = out.concat(
         "function rw_truthy(v){if(v===undefined||v===null||v===false){return false;}if(v===true){return true;}if(typeof v==='number'){return v!==0;}return v!==''&&v!=='0'&&v!=='false';}",
@@ -2390,7 +2407,7 @@ fun _render_runtime() -> String {
     out = out.concat("else if(k==='fo'){if(a){a.focus();}}")
     out = out.concat("else if(k==='sh'){rw_vis(a,true);}")
     out = out.concat("else if(k==='hd'){rw_vis(a,false);}")
-    out = out.concat("else if(k==='tv'){if(a){rw_vis(a,getComputedStyle(a).display==='none');}}")
+    out = out.concat("else if(k==='tv'){if(a){rw_vis(a,!rw_shown(a));}}")
     out = out.concat("else if(k==='nav'){window.location.assign(op[1]);}")
     out = out.concat("else if(k==='scr'){if(a&&a.scrollIntoView){a.scrollIntoView();}}")
     out = out.concat(
@@ -4336,9 +4353,15 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
             body = body.concat(lines.get(j)).concat("\n")
             j += 1
         }
-        let code = Node.code().child_text(body)
+        let code = Node.code()
         if info != "" && _valid_class_token("language-".concat(info)) {
             let _ = code.class_name("language-".concat(info))
+        }
+        let cfg = _hl_config(info)
+        if cfg.known {
+            _highlight_into(code, body, cfg)
+        } else {
+            let _ = code.child_text(body)
         }
         let _ = out.child(Node.pre().child(code))
         return if j < lines.len() {
@@ -4597,4 +4620,399 @@ fun atom_feed(
         out = out.concat("</entry>")
     }
     return out.concat("</feed>")
+}
+
+// ===== transitions and syntax highlighting =====
+
+// A reduced-motion-safe default for Node.transition(): elements fade, and a
+// visitor who asked for less motion gets an instant swap. Add it to the page
+// styles, or write your own rule against `[data-rw-trans].rw-hidden`.
+fun transition_styles() -> Stylesheet {
+    let css = "[data-rw-trans].rw-hidden{opacity:0;visibility:hidden;}@media (prefers-reduced-motion: no-preference){[data-rw-trans]{transition:opacity 200ms ease, visibility 0s linear 200ms;}[data-rw-trans]:not(.rw-hidden){transition:opacity 200ms ease, visibility 0s;}}"
+    return Stylesheet.new().raw(css)
+}
+
+// A dark token theme for highlight() output. The classes are tok-kw,
+// tok-str, tok-com, tok-num; override them to match your design.
+fun syntax_styles() -> Stylesheet {
+    let css = ".tok-kw{color:#c792ea;}.tok-str{color:#c3e88d;}.tok-com{color:#8b93b8;font-style:italic;}.tok-num{color:#f78c6c;}"
+    return Stylesheet.new().raw(css)
+}
+
+// How to tokenize one language.
+struct HlConfig {
+    known: Bool,
+    slash: Bool,
+    hash: Bool,
+    block: Bool,
+    backtick: Bool,
+    keywords: List<String>,
+}
+
+fun _hl_none() -> HlConfig {
+    let kw: List<String> = []
+    return HlConfig {
+        known: false,
+        slash: false,
+        hash: false,
+        block: false,
+        backtick: false,
+        keywords: kw,
+    }
+}
+
+fun _hl_c_family(keywords: List<String>, backtick: Bool) -> HlConfig {
+    return HlConfig { known: true, slash: true, hash: false, block: true, backtick, keywords }
+}
+
+fun _hl_config(lang: String) -> HlConfig {
+    let l = lang.to_lower()
+    if l == "raven" || l == "rv" {
+        return _hl_c_family(
+            [
+                "fun",
+                "let",
+                "return",
+                "if",
+                "else",
+                "while",
+                "for",
+                "in",
+                "match",
+                "struct",
+                "enum",
+                "impl",
+                "import",
+                "true",
+                "false",
+                "self",
+                "spawn",
+                "Int",
+                "String",
+                "Bool",
+                "Node",
+                "List",
+            ],
+            false,
+        )
+    }
+    if l == "rust" || l == "rs" {
+        return _hl_c_family(
+            [
+                "fn",
+                "let",
+                "mut",
+                "return",
+                "if",
+                "else",
+                "while",
+                "for",
+                "in",
+                "match",
+                "struct",
+                "enum",
+                "impl",
+                "trait",
+                "use",
+                "pub",
+                "self",
+                "true",
+                "false",
+                "async",
+                "await",
+                "move",
+                "ref",
+                "where",
+                "type",
+                "const",
+                "static",
+            ],
+            false,
+        )
+    }
+    if l == "js" || l == "javascript" || l == "ts" || l == "typescript" {
+        return _hl_c_family(
+            [
+                "function",
+                "let",
+                "const",
+                "var",
+                "return",
+                "if",
+                "else",
+                "while",
+                "for",
+                "of",
+                "in",
+                "switch",
+                "case",
+                "class",
+                "extends",
+                "import",
+                "export",
+                "from",
+                "new",
+                "this",
+                "true",
+                "false",
+                "null",
+                "undefined",
+                "async",
+                "await",
+                "typeof",
+                "interface",
+                "type",
+            ],
+            true,
+        )
+    }
+    if l == "go" {
+        return _hl_c_family(
+            [
+                "func",
+                "var",
+                "const",
+                "return",
+                "if",
+                "else",
+                "for",
+                "range",
+                "switch",
+                "case",
+                "struct",
+                "interface",
+                "type",
+                "package",
+                "import",
+                "map",
+                "chan",
+                "go",
+                "defer",
+                "true",
+                "false",
+                "nil",
+            ],
+            true,
+        )
+    }
+    if l == "c" || l == "cpp" || l == "c++" || l == "java" {
+        return _hl_c_family(
+            [
+                "int",
+                "char",
+                "void",
+                "return",
+                "if",
+                "else",
+                "while",
+                "for",
+                "switch",
+                "case",
+                "struct",
+                "class",
+                "public",
+                "private",
+                "static",
+                "const",
+                "new",
+                "this",
+                "true",
+                "false",
+                "null",
+            ],
+            false,
+        )
+    }
+    if l == "python" || l == "py" {
+        return HlConfig {
+            known: true,
+            slash: false,
+            hash: true,
+            block: false,
+            backtick: false,
+            keywords: [
+                "def",
+                "return",
+                "if",
+                "elif",
+                "else",
+                "while",
+                "for",
+                "in",
+                "class",
+                "import",
+                "from",
+                "as",
+                "with",
+                "try",
+                "except",
+                "finally",
+                "lambda",
+                "True",
+                "False",
+                "None",
+                "and",
+                "or",
+                "not",
+                "pass",
+                "yield",
+                "async",
+                "await",
+            ],
+        }
+    }
+    if l == "bash" || l == "sh" || l == "shell" {
+        return HlConfig {
+            known: true,
+            slash: false,
+            hash: true,
+            block: false,
+            backtick: false,
+            keywords: [
+                "if",
+                "then",
+                "else",
+                "elif",
+                "fi",
+                "for",
+                "in",
+                "do",
+                "done",
+                "while",
+                "case",
+                "esac",
+                "function",
+                "return",
+                "export",
+                "local",
+            ],
+        }
+    }
+    return _hl_none()
+}
+
+fun _hl_word_char(b: Int) -> Bool {
+    return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 95
+}
+
+fun _hl_is_keyword(word: String, keywords: List<String>) -> Bool {
+    for kw in keywords {
+        if kw == word {
+            return true
+        }
+    }
+    return false
+}
+
+fun _hl_span(code: Node, cls: String, text: String) {
+    let _ = code.child(Node.span().class_name(cls).child_text(text))
+}
+
+// Syntax-highlight `source` into `code`: comments, strings, numbers, and
+// keywords become classed spans; everything else is escaped text. All text,
+// span or plain, passes through the escaping builders, so highlighting can
+// never inject markup.
+fun _highlight_into(code: Node, source: String, cfg: HlConfig) {
+    let buf = ""
+    let i = 0
+    let n = source.length()
+    while i < n {
+        let b = source.byte_at(i)
+        if cfg.block && b == 47 && i + 1 < n && source.byte_at(i + 1) == 42 {
+            if buf != "" {
+                let _ = code.child_text(buf)
+                buf = ""
+            }
+            let start = i
+            i += 2
+            while i + 1 < n && !(source.byte_at(i) == 42 && source.byte_at(i + 1) == 47) {
+                i += 1
+            }
+            i = i + 2
+            if i > n {
+                i = n
+            }
+            _hl_span(code, "tok-com", source.substring(start, i))
+        } else if (cfg.slash && b == 47 && i + 1 < n && source.byte_at(i + 1) == 47) || (cfg.hash && b == 35) {
+            if buf != "" {
+                let _ = code.child_text(buf)
+                buf = ""
+            }
+            let start = i
+            while i < n && source.byte_at(i) != 10 {
+                i += 1
+            }
+            _hl_span(code, "tok-com", source.substring(start, i))
+        } else if b == 34 || b == 39 || (cfg.backtick && b == 96) {
+            if buf != "" {
+                let _ = code.child_text(buf)
+                buf = ""
+            }
+            let quote = b
+            let start = i
+            i += 1
+            while i < n && source.byte_at(i) != quote {
+                if source.byte_at(i) == 92 {
+                    i += 1
+                }
+                i += 1
+            }
+            i += 1
+            if i > n {
+                i = n
+            }
+            _hl_span(code, "tok-str", source.substring(start, i))
+        } else if b >= 48 && b <= 57 && !(i > 0 && _hl_word_char(source.byte_at(i - 1))) {
+            if buf != "" {
+                let _ = code.child_text(buf)
+                buf = ""
+            }
+            let start = i
+            while i < n && (source.byte_at(i) >= 48 && source.byte_at(i) <= 57 || source.byte_at(i) == 46 || (source.byte_at(
+                i,
+            ) >= 97 && source.byte_at(i) <= 102) || (source.byte_at(i) >= 65 && source.byte_at(i) <= 70) || source.byte_at(
+                i,
+            ) == 120) {
+                i += 1
+            }
+            _hl_span(code, "tok-num", source.substring(start, i))
+        } else if _ascii_letter(b) || b == 95 {
+            let start = i
+            while i < n && _hl_word_char(source.byte_at(i)) {
+                i += 1
+            }
+            let word = source.substring(start, i)
+            if _hl_is_keyword(word, cfg.keywords) {
+                if buf != "" {
+                    let _ = code.child_text(buf)
+                    buf = ""
+                }
+                _hl_span(code, "tok-kw", word)
+            } else {
+                buf = buf.concat(word)
+            }
+        } else {
+            buf = buf.concat(source.substring(i, i + 1))
+            i += 1
+        }
+    }
+    if buf != "" {
+        let _ = code.child_text(buf)
+    }
+}
+
+// Highlight a standalone snippet into a <code> node. Markdown fenced blocks
+// call this automatically when the info string names a known language.
+fun highlight(source: String, lang: String) -> Node {
+    let code = Node.code()
+    if _valid_class_token("language-".concat(lang)) {
+        let _ = code.class_name("language-".concat(lang))
+    }
+    let cfg = _hl_config(lang)
+    if cfg.known {
+        _highlight_into(code, source, cfg)
+    } else {
+        let _ = code.child_text(source)
+    }
+    return code
 }

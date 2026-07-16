@@ -1,6 +1,6 @@
 import std/fs { create_dir_all, exists, read, write }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, load_documents, markdown, parse_document, query_param, request, signal, sort_documents_desc }
+import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, highlight, load_documents, markdown, parse_document, query_param, request, signal, sort_documents_desc, syntax_styles, transition_styles }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -1068,7 +1068,10 @@ fun test_markdown_renders_block_structure() {
     assert_true(html.contains("<em>text</em>"))
     assert_true(html.contains("<hr>"))
     assert_true(html.contains("language-raven"))
-    assert_true(html.contains("let x = 1"))
+    // The fenced block is highlighted now: the keyword is a span, and the
+    // rest of the line survives as escaped text.
+    assert_true(html.contains("tok-kw\">let"))
+    assert_true(html.contains("tok-num\">1"))
 }
 
 fun test_markdown_renders_inline_marks() {
@@ -1199,4 +1202,56 @@ fun test_dialog_effects_and_element() {
     // The runtime prefers showModal and falls back to the open attribute.
     let js = Page.new("Dlg", Node.dialog()).js()
     assert_true(js.contains("showModal"))
+}
+
+fun test_transition_tags_and_runtime() {
+    let sig = signal("open", "")
+    let node = Node.div().visible_if(sig).transition().render()
+    assert_true(node.contains("data-rw-trans"))
+    // The runtime toggles the class for a transition element and display for
+    // a plain one.
+    let js = Page.new("T", Node.div().visible_if(sig).transition()).js()
+    assert_true(js.contains("data-rw-trans"))
+    assert_true(js.contains("rw-hidden"))
+    assert_true(js.contains("classList.remove"))
+    // The default styles are reduced-motion safe.
+    let css = transition_styles().render()
+    assert_true(css.contains("[data-rw-trans].rw-hidden"))
+    assert_true(css.contains("prefers-reduced-motion: no-preference"))
+}
+
+fun test_highlight_classes_tokens_and_stays_safe() {
+    let node = highlight("let x = 42 // a </script> comment\nlet s = \"hi\"", "raven")
+    let html = node.render()
+    assert_true(html.contains("class=\"language-raven\""))
+    assert_true(html.contains("tok-kw\">let"))
+    assert_true(html.contains("tok-num\">42"))
+    assert_true(html.contains("tok-com"))
+    assert_true(html.contains("tok-str"))
+    // Highlighting escapes like everything else: the comment cannot inject.
+    assert_false(html.contains("</script>"))
+    assert_true(html.contains("&lt;/script&gt;"))
+    // An unknown language is plain escaped text, no spans.
+    let plain = highlight("<b>x</b>", "klingon").render()
+    assert_false(plain.contains("tok-"))
+    assert_true(plain.contains("&lt;b&gt;"))
+}
+
+fun test_markdown_fenced_block_is_highlighted() {
+    let html = markdown("```python\ndef f():\n    return 1  # done\n```").render()
+    assert_true(html.contains("<pre><code class=\"language-python\">"))
+    assert_true(html.contains("tok-kw\">def"))
+    assert_true(html.contains("tok-com\"># done"))
+    // A fenced block with no language stays plain.
+    let plain = markdown("```\njust text\n```").render()
+    assert_false(plain.contains("tok-"))
+    assert_true(plain.contains("just text"))
+}
+
+fun test_syntax_styles_exposes_the_tokens() {
+    let css = syntax_styles().render()
+    assert_true(css.contains(".tok-kw"))
+    assert_true(css.contains(".tok-str"))
+    assert_true(css.contains(".tok-com"))
+    assert_true(css.contains(".tok-num"))
 }
