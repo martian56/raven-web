@@ -6,6 +6,7 @@
 // writes JavaScript for it either.
 
 import std/http { Server, Request, Response }
+import std/net { listen as net_listen }
 import std/fs { create_dir_all, read, walk, exists, is_file, join, dirname }
 import std/time { now_millis, sleep_millis }
 import std/io { println }
@@ -313,14 +314,23 @@ impl Dev {
     }
 
     fun run(self, build: fun() -> Unit) {
-        let name = command_from(args())
+        let argv = args()
+        let name = command_from(argv)
+        // A --port on the command line overrides the builder default, so the
+        // same binary can be told a port without recompiling.
+        match port_flag(argv) {
+            Some(value) -> {
+                self.serve_port = value
+            },
+            None -> {},
+        }
         if name == "build" {
             _build_once(build)
             return
         }
         if name == "serve" {
             _build_once(build)
-            serve(self.dist, self.serve_port, reloader())
+            serve_from(self.dist, self.serve_port, reloader())
             return
         }
         if name == "dev" {
@@ -344,7 +354,7 @@ impl Dev {
                 _watch_and_recompile(entry, roots, excludes, state)
             })
             println("raven-web dev: watching ".concat(_join_list(roots, ", ")))
-            serve(self.dist, self.serve_port, state)
+            serve_from(self.dist, self.serve_port, state)
             return
         }
         if name == "help" {
@@ -367,6 +377,72 @@ impl Dev {
     fun _excludes(self) -> List<String> {
         return [self.dist, "target", ".git", "node_modules"]
     }
+}
+
+// The --port value from the argument list: "--port 3000", "--port=3000", or
+// "-p 3000". Returns None when absent or unparseable. Split out so it is
+// testable without a real argv.
+fun port_flag(argv: List<String>) -> Option<Int> {
+    let i = 0
+    while i < argv.len() {
+        let arg = argv.get(i)
+        if arg == "--port" || arg == "-p" {
+            if i + 1 < argv.len() {
+                return _parse_port(argv.get(i + 1))
+            }
+            return None
+        }
+        if arg.starts_with("--port=") {
+            return _parse_port(arg.substring(7, arg.length()))
+        }
+        i += 1
+    }
+    return None
+}
+
+fun _parse_port(text: String) -> Option<Int> {
+    return match text.trim().parse_int() {
+        Some(value) -> {
+            if value < 1 || value > 65535 {
+                None
+            } else {
+                Some(value)
+            }
+        },
+        None -> None,
+    }
+}
+
+// Whether `port` can be bound on localhost right now: probe it, then release
+// the probe so the real server can take it. A tiny race remains between the
+// probe and the bind, which falls back to the same behaviour as before.
+fun _port_free(port: Int) -> Bool {
+    let addr = "127.0.0.1:".concat(port.to_string())
+    return match net_listen(addr) {
+        Ok(listener) -> {
+            listener.close()
+            true
+        },
+        Err(_) -> false,
+    }
+}
+
+// Serve `dir`, but if `port` is taken, walk forward up to nine ports and
+// serve on the first free one, reporting the change instead of exiting with
+// an opaque bind error.
+fun serve_from(dir: String, port: Int, state: Reloader) {
+    let chosen = port
+    let tries = 0
+    while tries < 10 && !_port_free(chosen) {
+        println(
+            "raven-web: port ".concat(chosen.to_string()).concat(" is in use, trying ").concat(
+                (chosen + 1).to_string(),
+            ),
+        )
+        chosen = chosen + 1
+        tries += 1
+    }
+    serve(dir, chosen, state)
 }
 
 fun _join_list(items: List<String>, separator: String) -> String {
@@ -392,6 +468,8 @@ fun _usage() {
     println("  dev     build, serve with live reload, and rebuild on source changes")
     println("  serve   build once and serve, without watching")
     println("  help    show this message")
+    println("options:")
+    println("  --port N   serve on port N (default 8080; the next free port if taken)")
 }
 
 // Poll the watched roots; on a change, recompile the entry file and regenerate

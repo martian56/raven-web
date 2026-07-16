@@ -1,6 +1,6 @@
 import std/test { assert_false, assert_true }
 import std/json { JsonValue, stringify }
-import "./dev" { Reloader, command_from, excluded, inject_reload, package_name_from, resolve_path, status_body }
+import "./dev" { Reloader, command_from, excluded, inject_reload, package_name_from, port_flag, resolve_path, status_body }
 
 // A double-quoted copy of `value`, via the JSON writer, because a literal
 // quote character is awkward in a Raven string.
@@ -91,6 +91,39 @@ fun test_package_name_parses_out_of_rv_toml() {
         None -> assert_true(false),
     }
     match package_name_from("[package]\nversion = 1\n") {
+        Some(_) -> assert_true(false),
+        None -> assert_true(true),
+    }
+}
+
+fun test_port_flag_parses_forms() {
+    match port_flag(["site.exe", "dev", "--port", "3000"]) {
+        Some(p) -> assert_true(p == 3000),
+        None -> assert_true(false),
+    }
+    match port_flag(["site.exe", "serve", "--port=4173"]) {
+        Some(p) -> assert_true(p == 4173),
+        None -> assert_true(false),
+    }
+    match port_flag(["site.exe", "dev", "-p", "9000"]) {
+        Some(p) -> assert_true(p == 9000),
+        None -> assert_true(false),
+    }
+    // Absent, non-numeric, and out-of-range all yield None.
+    match port_flag(["site.exe", "dev"]) {
+        Some(_) -> assert_true(false),
+        None -> assert_true(true),
+    }
+    match port_flag(["site.exe", "--port", "notanumber"]) {
+        Some(_) -> assert_true(false),
+        None -> assert_true(true),
+    }
+    match port_flag(["site.exe", "--port", "70000"]) {
+        Some(_) -> assert_true(false),
+        None -> assert_true(true),
+    }
+    // A dangling flag with no value is None, not a crash.
+    match port_flag(["site.exe", "dev", "--port"]) {
         Some(_) -> assert_true(false),
         None -> assert_true(true),
     }
