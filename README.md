@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.14.0"
+"github.com/martian56/raven-web" = "v0.15.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -463,6 +463,39 @@ HTML is escaped, executable-looking attributes and unsafe URLs are rejected, and
 all interaction code is structured data interpreted by a fixed runtime rather
 than string-injected script.
 
+## Content: markdown, frontmatter, collections, feeds
+
+A content site is first-class. Markdown renders through the same safe
+builders as everything else: text is escaped, URLs are judged by scheme, and
+raw HTML in a document is text, not markup.
+
+```rust
+let posts = sort_documents_desc(load_documents("content"), "date")
+
+for post in posts {
+    let body = Node.new("article").child(post.html())   // markdown, rendered
+    site.page("/posts/".concat(post.slug), layout.wrap(post.get("title"), body)).lastmod(
+        post.get("date"),
+    )
+}
+page.file(StaticFile.new("feed.xml", atom_feed(title, url, feed_url, updated, entries)))
+```
+
+- `markdown(source)` renders a deliberate CommonMark subset: ATX headings,
+  paragraphs, fenced code (with `language-x` classes), blockquotes, flat
+  bullet and numbered lists, horizontal rules, emphasis, strong, inline
+  code, links, images, and backslash escapes. No raw HTML passthrough, by
+  design; no tables, footnotes, reference links, or nested lists yet.
+- `parse_document(source)` splits `--- key: value ---` frontmatter from the
+  body; `load_documents(dir)` parses every `.md` under a directory with the
+  file name as the slug; `sort_documents_desc(docs, "date")` orders them
+  newest first; `chunks(items, size)` splits for pagination.
+- `atom_feed(...)` builds an Atom feed from the same ISO dates frontmatter
+  uses, escaped like everything else.
+
+`examples/blog.rv` is the whole pattern: a directory of markdown becomes a
+site with an index, clean post URLs, a dated sitemap, and a feed.
+
 ## Production output
 
 - `page.optimize()` minifies the emitted CSS and content-hashes the asset
@@ -486,6 +519,7 @@ than string-injected script.
 
 ## Examples
 
+- `examples/blog.rv`: a markdown-driven blog: frontmatter, collections, clean URLs, a dated sitemap, and an Atom feed.
 - `examples/starter.rv`: the canonical single-file project (view, styles,
   build, and the standard CLI). Copy it to start a new site.
 - `examples/landing.rv`: a self-contained 2.0 showcase (components, composition,

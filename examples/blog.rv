@@ -1,0 +1,69 @@
+// A blog from a directory of markdown files: frontmatter drives the index,
+// the sitemap dates, and the Atom feed; each body renders through the safe
+// builders. Build with:
+//
+//   raven build examples/blog.rv -o target/blog.exe
+//   ./target/blog.exe            # writes dist-blog/
+
+import std/io { println }
+import "../lib" { Document, FeedEntry, Layout, Node, Page, Site, StaticFile, atom_feed, load_documents, sort_documents_desc }
+
+fun shell() -> Layout {
+    return Layout.new().header(Node.header().child(Node.link("The Raven Blog", "/"))).footer(
+        Node.footer().child_text("Written in markdown, built by raven-web."),
+    )
+}
+
+fun post_url(post: Document) -> String {
+    return "https://blog.example.com/posts/".concat(post.slug).concat("/")
+}
+
+fun index_page(posts: List<Document>, layout: Layout, feed: String) -> Page {
+    let listing = Node.ul()
+    for post in posts {
+        let _ = listing.child(
+            Node.li().child(Node.link(post.get("title"), "/posts/".concat(post.slug).concat("/"))).child_text(
+                " ",
+            ).child(Node.small().child_text(post.get("date"))).child(
+                Node.p().child_text(post.get("summary")),
+            ),
+        )
+    }
+    let body = Node.main_node().child(Node.h1().child_text("Posts")).child(listing)
+    return layout.wrap("The Raven Blog", body).file(StaticFile.new("feed.xml", feed))
+}
+
+fun main() {
+    let layout = shell()
+    let posts = sort_documents_desc(load_documents("examples/content"), "date")
+    let entries: List<FeedEntry> = []
+    for post in posts {
+        entries.push(
+            FeedEntry {
+                title: post.get("title"),
+                url: post_url(post),
+                date: post.get("date"),
+                summary: post.get("summary"),
+            },
+        )
+    }
+    let feed = atom_feed(
+        "The Raven Blog",
+        "https://blog.example.com/",
+        "https://blog.example.com/feed.xml",
+        posts.get(0).get("date"),
+        entries,
+    )
+    let site = Site.new("https://blog.example.com")
+    let _ = site.page("/", index_page(posts, layout, feed))
+    for post in posts {
+        let body = Node.main_node().child(Node.new("article").child(post.html()))
+        let _ = site.page("/posts/".concat(post.slug), layout.wrap(post.get("title"), body)).lastmod(
+            post.get("date"),
+        )
+    }
+    match site.write_static("dist-blog") {
+        Ok(out) -> println("wrote ".concat(out.page_count().to_string()).concat(" pages")),
+        Err(error) -> println(error.to_string()),
+    }
+}

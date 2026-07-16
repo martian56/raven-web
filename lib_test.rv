@@ -1,6 +1,6 @@
-import std/fs { exists, read }
+import std/fs { create_dir_all, exists, read, write }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, Ctx, CssRule, Expr, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, query_param, request, signal }
+import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, load_documents, markdown, parse_document, query_param, request, signal, sort_documents_desc }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -1037,4 +1037,116 @@ fun test_base_path_prefixes_assets_and_config() {
     assert_true(root.html().contains("href=\"styles.css\""))
     let bad = Page.new("B", Node.div()).base_path("no space allowed here?")
     assert_true(_has_warning(bad.warnings(), "base_path"))
+}
+
+fun test_frontmatter_parses_and_survives_edge_cases() {
+    let source = "---\ntitle: Hello: a colon survives\ndate: \"2026-07-16\"\n---\nBody line one.\nBody line two."
+    let doc = parse_document(source)
+    assert_true(doc.get("title") == "Hello: a colon survives")
+    assert_true(doc.get("date") == "2026-07-16")
+    assert_true(doc.body.contains("Body line one."))
+    assert_true(doc.body.contains("Body line two."))
+    // No frontmatter: the whole source is body.
+    let plain = parse_document("Just text.")
+    assert_true(plain.body == "Just text.")
+    assert_true(plain.get_or("title", "none") == "none")
+    // An unclosed header is treated as body, not swallowed.
+    let broken = parse_document("---\ntitle: half\nno closing fence")
+    assert_true(broken.body.contains("no closing fence"))
+    assert_true(broken.get("title") == "")
+}
+
+fun test_markdown_renders_block_structure() {
+    let source = "# Title\n\nA paragraph that\nspans two lines.\n\n## Section\n\n- one\n- two\n\n1. first\n2. second\n\n> quoted *text*\n\n---\n\n```raven\nlet x = 1\n```"
+    let html = markdown(source).render()
+    assert_true(html.contains("<h1>Title</h1>"))
+    assert_true(html.contains("<p>A paragraph that spans two lines.</p>"))
+    assert_true(html.contains("<h2>Section</h2>"))
+    assert_true(html.contains("<ul><li>one</li><li>two</li></ul>"))
+    assert_true(html.contains("<ol><li>first</li><li>second</li></ol>"))
+    assert_true(html.contains("<blockquote>"))
+    assert_true(html.contains("<em>text</em>"))
+    assert_true(html.contains("<hr>"))
+    assert_true(html.contains("language-raven"))
+    assert_true(html.contains("let x = 1"))
+}
+
+fun test_markdown_renders_inline_marks() {
+    let html = markdown(
+        "Mix **strong** and *em* and `code` and a [link](/docs) and escaped \\*stars\\*.",
+    ).render()
+    assert_true(html.contains("<strong>strong</strong>"))
+    assert_true(html.contains("<em>em</em>"))
+    assert_true(html.contains("<code>code</code>"))
+    assert_true(html.contains("href=\"/docs\""))
+    assert_true(html.contains("*stars*"))
+    // Unmatched markers stay literal instead of vanishing.
+    let loose = markdown("a * b and [not a link").render()
+    assert_true(loose.contains("a * b"))
+    assert_true(loose.contains("[not a link"))
+}
+
+fun test_markdown_is_safe_by_construction() {
+    let source = "<script>alert(1)</script>\n\nA [bad](javascript:alert(1)) link and ![img](javascript:alert(2)).\n\n<img src=x onerror=alert(3)>"
+    let node = markdown(source)
+    let html = node.render()
+    assert_false(html.contains("<script>"))
+    assert_true(html.contains("&lt;script&gt;"))
+    assert_false(html.contains("javascript:alert"))
+    // The raw img tag is text, not markup: escaped, its onerror is inert.
+    assert_false(html.contains("<img src=x"))
+    assert_true(html.contains("&lt;img src=x onerror"))
+    // The drops are loud, like every other builder.
+    let warnings = Page.new("W", node).warnings()
+    assert_true(warnings.len() >= 2)
+    // A markdown image gets the image defaults.
+    let img = markdown("![alt text](/pic.png)").render()
+    assert_true(img.contains("loading=\"lazy\""))
+    assert_true(img.contains("alt=\"alt text\""))
+}
+
+fun test_documents_load_sort_and_chunk() {
+    let _mk = create_dir_all("target/rw-content-test")
+    let _a = write(
+        "target/rw-content-test/a-first.md",
+        "---\ntitle: First\ndate: 2026-07-01\n---\nAlpha",
+    )
+    let _b = write(
+        "target/rw-content-test/b-second.md",
+        "---\ntitle: Second\ndate: 2026-07-16\n---\nBeta",
+    )
+    let docs = load_documents("target/rw-content-test")
+    assert_true(docs.len() == 2)
+    let sorted = sort_documents_desc(docs, "date")
+    assert_true(sorted.get(0).get("title") == "Second")
+    assert_true(sorted.get(1).get("title") == "First")
+    assert_true(sorted.get(0).slug == "b-second")
+    assert_true(sorted.get(0).html().render().contains("Beta"))
+    let pages = chunks(sorted, 1)
+    assert_true(pages.len() == 2)
+    assert_true(pages.get(0).len() == 1)
+}
+
+fun test_atom_feed_escapes_and_dates() {
+    let entries: List<FeedEntry> = [
+        FeedEntry {
+            title: "One <two>",
+            url: "https://example.com/blog/one/",
+            date: "2026-07-16",
+            summary: "A & B",
+        },
+    ]
+    let xml = atom_feed(
+        "My <blog>",
+        "https://example.com/",
+        "https://example.com/feed.xml",
+        "2026-07-16",
+        entries,
+    )
+    assert_true(xml.contains("<title>My &lt;blog&gt;</title>"))
+    assert_true(xml.contains("<title>One &lt;two&gt;</title>"))
+    assert_true(xml.contains("<summary>A &amp; B</summary>"))
+    assert_true(xml.contains("<updated>2026-07-16T00:00:00Z</updated>"))
+    assert_true(xml.contains("rel=\"self\""))
+    assert_false(xml.contains("<two>"))
 }

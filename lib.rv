@@ -1,7 +1,7 @@
 // raven-web: safe browser artifacts for Raven.
 
 import std/json { JsonValue, stringify }
-import std/fs { create_dir_all, dirname, join, list_dir, remove_file, write }
+import std/fs { basename, create_dir_all, dirname, join, list_dir, read, remove_file, walk, write }
 import std/error { Error }
 import std/io { println }
 import std/hash { fnv1a }
@@ -3941,4 +3941,512 @@ impl Theme {
         }
         return out
     }
+}
+
+// ===== The content pipeline =====
+//
+// Markdown, frontmatter, collections, and feeds, so a content site is
+// first-class. Markdown renders through the same safe Node builders as
+// everything else: text is escaped, URLs are judged by scheme, and raw HTML
+// in a document is text, not markup. The dialect is a deliberate subset of
+// CommonMark: ATX headings, paragraphs, fenced code, blockquotes, flat
+// bullet and numbered lists, horizontal rules, emphasis, strong, inline
+// code, links, images, and backslash escapes. No raw HTML passthrough (by
+// design), no tables, no footnotes, no reference links, no nested lists.
+
+// One content file: frontmatter keys, the body below them, and where it
+// came from. `slug` is the file name without its extension.
+struct Document {
+    slug: String,
+    path: String,
+    meta: Map<String, String>,
+    body: String,
+}
+
+impl Document {
+    fun get(self, key: String) -> String {
+        return self.meta.get_or(key, "")
+    }
+
+    fun get_or(self, key: String, default: String) -> String {
+        return self.meta.get_or(key, default)
+    }
+
+    // The body, rendered. A convenience for the common case.
+    fun html(self) -> Node {
+        return markdown(self.body)
+    }
+}
+
+fun _strip_value_quotes(value: String) -> String {
+    let v = value.trim()
+    if v.length() >= 2 && v.byte_at(0) == 34 && v.byte_at(v.length() - 1) == 34 {
+        return v.substring(1, v.length() - 1)
+    }
+    return v
+}
+
+// Parse a document with optional frontmatter: a leading "---" line, then
+// "key: value" lines (split at the first colon, so values may contain
+// colons), then a closing "---". No nesting; one string value per key.
+fun parse_document(source: String) -> Document {
+    let meta: Map<String, String> = Map.new()
+    let lines = source.split("\n")
+    if lines.len() == 0 || lines.get(0).trim() != "---" {
+        return Document { slug: "", path: "", meta, body: source }
+    }
+    let i = 1
+    while i < lines.len() && lines.get(i).trim() != "---" {
+        let line = lines.get(i)
+        let sep = line.index_of(":")
+        if sep > 0 {
+            let key = line.substring(0, sep).trim()
+            let value = _strip_value_quotes(line.substring(sep + 1, line.length()))
+            if key != "" {
+                meta.set(key, value)
+            }
+        }
+        i += 1
+    }
+    if i >= lines.len() {
+        // No closing fence: the whole file was a would-be header. Treat the
+        // source as body so nothing silently disappears.
+        let empty: Map<String, String> = Map.new()
+        return Document { slug: "", path: "", meta: empty, body: source }
+    }
+    let body = ""
+    let j = i + 1
+    while j < lines.len() {
+        if body != "" {
+            body = body.concat("\n")
+        }
+        body = body.concat(lines.get(j))
+        j += 1
+    }
+    return Document { slug: "", path: "", meta, body }
+}
+
+fun _doc_slug(path: String) -> String {
+    let name = basename(path)
+    if name.to_lower().ends_with(".md") {
+        return name.substring(0, name.length() - 3)
+    }
+    return name
+}
+
+// Every .md file under `dir`, parsed, in walk order. Unreadable files are
+// skipped; sort with sort_documents_desc for newest-first content.
+fun load_documents(dir: String) -> List<Document> {
+    let out: List<Document> = []
+    match walk(dir) {
+        Ok(entries) -> {
+            for entry in entries {
+                if entry.to_lower().ends_with(".md") {
+                    match read(entry) {
+                        Ok(text) -> {
+                            let doc = parse_document(text)
+                            doc.path = entry
+                            doc.slug = _doc_slug(entry)
+                            out.push(doc)
+                        },
+                        Err(_) -> {},
+                    }
+                }
+            }
+        },
+        Err(_) -> {},
+    }
+    return out
+}
+
+// Sorted by a frontmatter key, descending, so ISO dates come newest first.
+// Insertion sort: content lists are small and this keeps ties stable.
+fun sort_documents_desc(docs: List<Document>, key: String) -> List<Document> {
+    let out: List<Document> = []
+    for doc in docs {
+        let value = doc.get(key)
+        let inserted = false
+        let result: List<Document> = []
+        for existing in out {
+            if !inserted && existing.get(key) < value {
+                result.push(doc)
+                inserted = true
+            }
+            result.push(existing)
+        }
+        if !inserted {
+            result.push(doc)
+        }
+        out = result
+    }
+    return out
+}
+
+// items split into pages of `size`, for pagination. A non-positive size
+// yields a single page.
+fun chunks<T>(items: List<T>, size: Int) -> List<List<T>> {
+    let out: List<List<T>> = []
+    if size <= 0 {
+        out.push(items)
+        return out
+    }
+    let current: List<T> = []
+    for item in items {
+        current.push(item)
+        if current.len() == size {
+            out.push(current)
+            let next: List<T> = []
+            current = next
+        }
+    }
+    if current.len() > 0 {
+        out.push(current)
+    }
+    return out
+}
+
+// ----- markdown -----
+
+fun markdown(source: String) -> Node {
+    let out = Node.fragment()
+    let lines = source.split("\n")
+    let i = 0
+    while i < lines.len() {
+        i = _md_block(out, lines, i)
+    }
+    return out
+}
+
+fun _md_all(text: String, b: Int) -> Bool {
+    if text.length() == 0 {
+        return false
+    }
+    let i = 0
+    while i < text.length() {
+        if text.byte_at(i) != b {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+fun _md_is_fence(line: String) -> Bool {
+    let t = line.trim()
+    return t.length() >= 3 && t.byte_at(0) == 96 && t.byte_at(1) == 96 && t.byte_at(2) == 96
+}
+
+fun _md_is_bullet(line: String) -> Bool {
+    return line.starts_with("- ") || line.starts_with("* ")
+}
+
+fun _md_ordered_marker(line: String) -> Int {
+    let i = 0
+    while i < line.length() && line.byte_at(i) >= 48 && line.byte_at(i) <= 57 {
+        i += 1
+    }
+    if i == 0 || i + 1 >= line.length() {
+        return -1
+    }
+    if line.byte_at(i) == 46 && line.byte_at(i + 1) == 32 {
+        return i + 2
+    }
+    return -1
+}
+
+fun _md_heading_level(line: String) -> Int {
+    let i = 0
+    while i < line.length() && line.byte_at(i) == 35 {
+        i += 1
+    }
+    if i >= 1 && i <= 6 && i < line.length() && line.byte_at(i) == 32 {
+        return i
+    }
+    return 0
+}
+
+// Parse one block starting at `i`; append it to `out`; return the next line
+// index. Always advances.
+fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
+    let line = lines.get(i)
+    let t = line.trim()
+    if t == "" {
+        return i + 1
+    }
+    let level = _md_heading_level(t)
+    if level > 0 {
+        let h = Node.new("h".concat(level.to_string()))
+        _md_inline(h, t.substring(level + 1, t.length()).trim())
+        let _ = out.child(h)
+        return i + 1
+    }
+    if _md_is_fence(line) {
+        let info = line.trim().substring(3, line.trim().length()).trim()
+        let body = ""
+        let j = i + 1
+        while j < lines.len() && !_md_is_fence(lines.get(j)) {
+            body = body.concat(lines.get(j)).concat("\n")
+            j += 1
+        }
+        let code = Node.code().child_text(body)
+        if info != "" && _valid_class_token("language-".concat(info)) {
+            let _ = code.class_name("language-".concat(info))
+        }
+        let _ = out.child(Node.pre().child(code))
+        return if j < lines.len() {
+            j + 1
+        } else {
+            j
+        }
+    }
+    if _md_all(t, 45) || _md_all(t, 42) {
+        let _ = out.child(Node.hr())
+        return i + 1
+    }
+    if t.starts_with(">") {
+        let inner = ""
+        let j = i
+        while j < lines.len() && lines.get(j).trim().starts_with(">") {
+            let stripped = lines.get(j).trim().substring(1, lines.get(j).trim().length())
+            if stripped.starts_with(" ") {
+                stripped = stripped.substring(1, stripped.length())
+            }
+            if inner != "" {
+                inner = inner.concat("\n")
+            }
+            inner = inner.concat(stripped)
+            j += 1
+        }
+        let _ = out.child(Node.blockquote().child(markdown(inner)))
+        return j
+    }
+    if _md_is_bullet(line) {
+        let list = Node.ul()
+        let j = i
+        while j < lines.len() && _md_is_bullet(lines.get(j)) {
+            let item = Node.li()
+            _md_inline(item, lines.get(j).substring(2, lines.get(j).length()).trim())
+            let _ = list.child(item)
+            j += 1
+        }
+        let _ = out.child(list)
+        return j
+    }
+    if _md_ordered_marker(line) > 0 {
+        let list = Node.ol()
+        let j = i
+        while j < lines.len() && _md_ordered_marker(lines.get(j)) > 0 {
+            let start = _md_ordered_marker(lines.get(j))
+            let item = Node.li()
+            _md_inline(item, lines.get(j).substring(start, lines.get(j).length()).trim())
+            let _ = list.child(item)
+            j += 1
+        }
+        let _ = out.child(list)
+        return j
+    }
+    // Paragraph: consecutive plain lines join with spaces.
+    let text = t
+    let j = i + 1
+    while j < lines.len() {
+        let peek = lines.get(j)
+        let pt = peek.trim()
+        let plain = pt != "" && _md_heading_level(pt) == 0 && !_md_is_fence(peek) && !_md_is_bullet(
+            peek,
+        ) && _md_ordered_marker(peek) < 0 && !pt.starts_with(">") && !_md_all(pt, 45) && !_md_all(pt, 42)
+        if !plain {
+            break
+        }
+        text = text.concat(" ").concat(pt)
+        j += 1
+    }
+    let p = Node.p()
+    _md_inline(p, text)
+    let _ = out.child(p)
+    return j
+}
+
+fun _md_find_byte(text: String, b: Int, from: Int) -> Int {
+    let i = from
+    while i < text.length() {
+        if text.byte_at(i) == b {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+fun _md_find_double_star(text: String, from: Int) -> Int {
+    let i = from
+    while i + 1 < text.length() {
+        if text.byte_at(i) == 42 && text.byte_at(i + 1) == 42 {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+fun _md_flush(target: Node, buf: String) -> String {
+    if buf != "" {
+        target.kids.push(Node.text(buf))
+    }
+    return ""
+}
+
+// A parsed [label](url) shape at `open` (the bracket's index), or ok=false.
+struct MdLink {
+    ok: Bool,
+    label: String,
+    url: String,
+    next: Int,
+}
+
+fun _md_link_at(text: String, open: Int) -> MdLink {
+    let close = _md_find_byte(text, 93, open + 1)
+    if close < 0 || close + 1 >= text.length() || text.byte_at(close + 1) != 40 {
+        return MdLink { ok: false, label: "", url: "", next: open }
+    }
+    let finish = _md_find_byte(text, 41, close + 2)
+    if finish < 0 {
+        return MdLink { ok: false, label: "", url: "", next: open }
+    }
+    return MdLink {
+        ok: true,
+        label: text.substring(open + 1, close),
+        url: text.substring(close + 2, finish).trim(),
+        next: finish + 1,
+    }
+}
+
+// Inline markdown into `target`: emphasis, strong, code spans, links,
+// images, backslash escapes. Unmatched markers fall through as literal
+// text rather than vanishing.
+fun _md_inline(target: Node, text: String) {
+    let buf = ""
+    let i = 0
+    let n = text.length()
+    while i < n {
+        let b = text.byte_at(i)
+        if b == 92 && i + 1 < n {
+            buf = buf.concat(text.substring(i + 1, i + 2))
+            i += 2
+        } else if b == 96 {
+            let close = _md_find_byte(text, 96, i + 1)
+            if close < 0 {
+                buf = buf.concat("`")
+                i += 1
+            } else {
+                buf = _md_flush(target, buf)
+                let _ = target.child(Node.code().child_text(text.substring(i + 1, close)))
+                i = close + 1
+            }
+        } else if b == 42 && i + 1 < n && text.byte_at(i + 1) == 42 {
+            let close = _md_find_double_star(text, i + 2)
+            if close < 0 {
+                buf = buf.concat("**")
+                i += 2
+            } else {
+                buf = _md_flush(target, buf)
+                let strong = Node.strong()
+                _md_inline(strong, text.substring(i + 2, close))
+                let _ = target.child(strong)
+                i = close + 2
+            }
+        } else if b == 42 {
+            let close = _md_find_byte(text, 42, i + 1)
+            if close < 0 {
+                buf = buf.concat("*")
+                i += 1
+            } else {
+                buf = _md_flush(target, buf)
+                let em = Node.em()
+                _md_inline(em, text.substring(i + 1, close))
+                let _ = target.child(em)
+                i = close + 1
+            }
+        } else if b == 33 && i + 1 < n && text.byte_at(i + 1) == 91 {
+            let link = _md_link_at(text, i + 1)
+            if link.ok {
+                buf = _md_flush(target, buf)
+                let _ = target.child(Node.image(link.url, link.label))
+                i = link.next
+            } else {
+                buf = buf.concat("!")
+                i += 1
+            }
+        } else if b == 91 {
+            let link = _md_link_at(text, i)
+            if link.ok {
+                buf = _md_flush(target, buf)
+                let a = Node.new("a").href(link.url)
+                _md_inline(a, link.label)
+                let _ = target.child(a)
+                i = link.next
+            } else {
+                buf = buf.concat("[")
+                i += 1
+            }
+        } else {
+            buf = buf.concat(text.substring(i, i + 1))
+            i += 1
+        }
+    }
+    let _ = _md_flush(target, buf)
+}
+
+// ----- feeds -----
+
+// One Atom entry. `date` is an ISO date ("2026-07-16") or full RFC 3339
+// timestamp; a bare date gains midnight UTC on the way out.
+struct FeedEntry {
+    title: String,
+    url: String,
+    date: String,
+    summary: String,
+}
+
+fun _rfc3339(date: String) -> String {
+    if date.length() == 10 {
+        return date.concat("T00:00:00Z")
+    }
+    return date
+}
+
+// An Atom feed (RFC 4287), which takes the same ISO dates frontmatter uses.
+// Serve it via Page.file: page.file(StaticFile.new("feed.xml", atom_feed(...))).
+fun atom_feed(
+    title: String,
+    site_url: String,
+    feed_url: String,
+    updated: String,
+    entries: List<FeedEntry>,
+) -> String {
+    let q = _quote()
+    let out = "<?xml version=".concat(q).concat("1.0").concat(q).concat(" encoding=").concat(q).concat(
+        "UTF-8",
+    ).concat(q).concat("?>")
+    out = out.concat("<feed xmlns=").concat(q).concat("http://www.w3.org/2005/Atom").concat(q).concat(
+        ">",
+    )
+    out = out.concat("<title>").concat(_escape_html(title)).concat("</title>")
+    out = out.concat("<link href=").concat(q).concat(_escape_html(site_url)).concat(q).concat("/>")
+    out = out.concat("<link rel=").concat(q).concat("self").concat(q).concat(" href=").concat(q).concat(
+        _escape_html(feed_url),
+    ).concat(q).concat("/>")
+    out = out.concat("<id>").concat(_escape_html(site_url)).concat("</id>")
+    out = out.concat("<updated>").concat(_escape_html(_rfc3339(updated))).concat("</updated>")
+    for entry in entries {
+        out = out.concat("<entry>")
+        out = out.concat("<title>").concat(_escape_html(entry.title)).concat("</title>")
+        out = out.concat("<link href=").concat(q).concat(_escape_html(entry.url)).concat(q).concat("/>")
+        out = out.concat("<id>").concat(_escape_html(entry.url)).concat("</id>")
+        out = out.concat("<updated>").concat(_escape_html(_rfc3339(entry.date))).concat("</updated>")
+        if entry.summary != "" {
+            out = out.concat("<summary>").concat(_escape_html(entry.summary)).concat("</summary>")
+        }
+        out = out.concat("</entry>")
+    }
+    return out.concat("</feed>")
 }
