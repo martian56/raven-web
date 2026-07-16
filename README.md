@@ -616,3 +616,8 @@ raven build examples/landing.rv -o landing.exe
 rvpm fmt --check
 rvpm test
 ```
+
+Testing a site you build with raven-web is covered in
+[docs/TESTING.md](docs/TESTING.md): golden-HTML assertions over `page.html()`,
+`page.warnings()` as a lint gate, and `strict()` in CI. The runnable version
+is `examples/site_test.rv`.
