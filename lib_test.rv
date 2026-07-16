@@ -761,3 +761,96 @@ fun test_semantic_constructors_render() {
     assert_true(html.contains("<table>"))
     assert_true(html.contains("<th>Name</th>"))
 }
+
+fun _has_warning(warnings: List<String>, needle: String) -> Bool {
+    for warning in warnings {
+        if warning.contains(needle) {
+            return true
+        }
+    }
+    return false
+}
+
+fun test_dropped_node_inputs_become_warnings() {
+    let root = Node.div().attr("onclick", "alert(1)").child(Node.new("script")).child(
+        Node.link("Bad", "javascript:alert(1)"),
+    )
+    let warnings = Page.new("W", root).warnings()
+    assert_true(_has_warning(warnings, "onclick"))
+    assert_true(_has_warning(warnings, "script"))
+    assert_true(_has_warning(warnings, "unsafe URL"))
+    // The page itself still renders, and still renders safely.
+    let html = Page.new("W", root).html()
+    assert_false(html.contains("onclick"))
+    assert_false(html.contains("<script>alert"))
+}
+
+fun test_behavior_and_fetch_drops_reach_the_page() {
+    let bad_click = Behavior.new().navigate("javascript:alert(1)").set_text("#ok {", "x")
+    let spec = request("POST", "/save").field("title", "#title {")
+    let root = Node.div().child(Node.button("Go").on_click(bad_click)).child(
+        Node.button("Save").on_click(Behavior.new().fetch(spec)),
+    )
+    let warnings = Page.new("W", root).warnings()
+    assert_true(_has_warning(warnings, "navigate"))
+    assert_true(_has_warning(warnings, "set_text"))
+    assert_true(_has_warning(warnings, "fetch field"))
+}
+
+fun test_style_and_theme_drops_reach_the_page() {
+    let sheet = Stylesheet.new().add(CssRule.new(".card {").set("color", "red")).add(
+        CssRule.class_name("ok").set("bad prop", "red"),
+    )
+    let warnings = Page.new("W", Node.div()).with_styles(sheet).warnings()
+    assert_true(_has_warning(warnings, "invalid selector"))
+    assert_true(_has_warning(warnings, "invalid property"))
+
+    let themed = Theme.new().color("bg", "#fff", "#000").token("bad name", "1", "2").stylesheet()
+    let theme_warnings = Page.new("T", Node.div()).with_styles(themed).warnings()
+    assert_true(_has_warning(theme_warnings, "theme token"))
+}
+
+fun test_list_templates_and_router_drops_reach_the_page() {
+    let rows = signal("rows", "")
+    let template = Node.li().attr("onmouseover", "steal()")
+    let list = Node.ul().each_of(rows, template)
+    let router = Router.new().route("no-leading-slash", Node.div()).route("/", list)
+    let warnings = Page.new("W", router.to_node()).warnings()
+    assert_true(_has_warning(warnings, "onmouseover"))
+    assert_true(_has_warning(warnings, "invalid pattern"))
+}
+
+fun test_page_level_drops_become_warnings() {
+    let page = Page.new("W", Node.div()).state("bad key;", "1").lang("bad lang!").favicon(
+        "javascript:alert(1)",
+    ).persist_key("also bad;")
+    let warnings = page.warnings()
+    assert_true(_has_warning(warnings, "state declaration"))
+    assert_true(_has_warning(warnings, "language tag"))
+    assert_true(_has_warning(warnings, "favicon"))
+    assert_true(_has_warning(warnings, "persist"))
+}
+
+fun test_a_clean_page_has_no_warnings() {
+    let n = signal("n", "0")
+    let page = Page.new(
+        "Clean",
+        Node.main_node().child(Node.h1().child_text("Hi")).child(
+            Node.button("+").on_click(Behavior.new().increment(n, 1)),
+        ).child(Node.span().text_of(n)),
+    ).signal(n).with_styles(Stylesheet.new().add(CssRule.class_name("hero").set("padding", "4rem")))
+    assert_true(page.warnings().len() == 0)
+}
+
+fun test_strict_pages_refuse_to_write_with_warnings() {
+    let dirty = Node.div().attr("onclick", "alert(1)")
+    match Page.new("Strict", dirty).strict().write_static("target/raven-web-strict-output") {
+        Ok(_) -> assert_true(false),
+        Err(error) -> assert_true(error.message.contains("warning")),
+    }
+    // Without strict the same page writes, so warnings stay non-breaking.
+    match Page.new("Loose", dirty).write_static("target/raven-web-loose-output") {
+        Ok(output) -> assert_true(output.contains("index.html")),
+        Err(_) -> assert_true(false),
+    }
+}

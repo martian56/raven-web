@@ -75,6 +75,20 @@ Option A (grow the library, no compiler change) is the chosen path. Status:
   Verified in a DOM. This was the same shape as every other bug found here: the
   binding looked wired and did nothing.
 
+- **Developer experience, addressed in v0.12.0.** Two structural fixes. First,
+  the silent-drop failure mode named throughout this document is no longer
+  silent: every dropped input is recorded as a warning, printed by
+  `write_static`, returned by `Page.warnings()`, and fatal under
+  `Page.strict()`. Second, the dev loop closed: `dev.cli` wraps a generator in
+  the standard commands, and dev mode recompiles the author's own Raven source
+  on save (via `std/process` and the installed compiler), regenerates the
+  output, live-reloads the browser, and shows compile errors as a browser
+  overlay. Verified by driving the real server: an edit reached the browser in
+  about two seconds, a syntax error surfaced in the overlay with the
+  compiler's message, and the fix cleared it. The overlay client was driven in
+  a real DOM: error text arrives via textContent only, and no reload happens
+  while an error shows.
+
 **Where that leaves the goal.** Every Tier 2, 3, and 4 item that Option A can
 reach is now done, and Tier 1 is half done: components are reusable, typed, and
 stateful, but only where the tree is known at build time. What is left is the

@@ -1,0 +1,59 @@
+// The canonical raven-web project: one file, one command per task.
+//
+//   raven build examples/starter.rv -o target/starter.exe
+//   ./target/starter.exe            # generate the site into dist-starter
+//   ./target/starter.exe dev        # serve it, watch sources, live reload
+//
+// In your own project the imports become:
+//   import "github.com/martian56/raven-web" { ... }
+//   import "github.com/martian56/raven-web/dev" { cli }
+
+import std/io { println }
+import "../lib" { Behavior, CssRule, Node, Page, Stylesheet, signal }
+import "../dev" { cli }
+
+fun view() -> Node {
+    let count = signal("count", "0")
+    return Node.main_node().class_name("shell").child(Node.h1().child_text("Hello from raven-web")).child(
+        Node.p().child_text("Edit examples/starter.rv and save; the browser follows."),
+    ).child(
+        Node.section().class_name("counter").child(
+            Node.button("-").on_click(Behavior.new().increment(count, 0 - 1)),
+        ).child(Node.strong().text_of(count)).child(
+            Node.button("+").on_click(Behavior.new().increment(count, 1)),
+        ),
+    )
+}
+
+fun styles() -> Stylesheet {
+    return Stylesheet.new().add(
+        CssRule.class_name("shell").set("max-width", "40rem").set("margin", "4rem auto").set(
+            "font-family",
+            "system-ui, sans-serif",
+        ),
+    ).add(
+        CssRule.class_name("counter").set("display", "flex").set("gap", "1rem").set(
+            "align-items",
+            "center",
+        ),
+    )
+}
+
+fun build() {
+    let count = signal("count", "0")
+    let page = Page.new("raven-web starter", view()).description("A raven-web starter page.").with_styles(
+        styles(),
+    ).signal(count)
+    match page.write_static("dist-starter") {
+        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    cli("examples/starter.rv", "dist-starter").run(
+        fun() -> Unit {
+            build()
+        },
+    )
+}

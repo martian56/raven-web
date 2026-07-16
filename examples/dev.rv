@@ -1,9 +1,16 @@
-// Dev workflow: build the site, watch sources, and serve with live reload.
-// Run it, open http://localhost:8080, edit this file, and the page reloads.
+// Dev workflow: cli() wraps the generator in the standard commands.
+//
+//   raven build examples/dev.rv -o target/dev.exe
+//   ./target/dev.exe dev
+//
+// opens http://localhost:8080 with live reload. Edit this file and save: the
+// harness recompiles it, regenerates dist, and the page reloads. Break the
+// syntax and save: the compiler error appears in the browser until it is
+// fixed.
 
 import std/io { println }
 import "../lib" { Behavior, Node, Page }
-import "../dev" { reloader, serve, watch }
+import "../dev" { cli }
 
 fun build() {
     let page = Page.new(
@@ -19,16 +26,9 @@ fun build() {
 }
 
 fun main() {
-    let state = reloader()
-    build()
-    spawn(fun() -> Unit {
-        watch(
-            ["examples/dev.rv"],
-            state,
-            fun() -> Unit {
-                build()
-            },
-        )
-    })
-    serve("dist", 8080, state)
+    cli("examples/dev.rv", "dist").run(
+        fun() -> Unit {
+            build()
+        },
+    )
 }

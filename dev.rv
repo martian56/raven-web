@@ -6,30 +6,61 @@
 // writes JavaScript for it either.
 
 import std/http { Server, Request, Response }
-import std/fs { read, walk, exists, is_file, join }
-import std/time { sleep_millis }
+import std/fs { create_dir_all, read, walk, exists, is_file, join, dirname }
+import std/time { now_millis, sleep_millis }
 import std/io { println }
+import std/env { args, exit }
+import std/process { Output, run }
 
-// Shared reload token. The watcher bumps it; the reload endpoint serves it; the
-// injected client polls the endpoint and reloads when it changes. A plain Int
-// is enough for a dev tool: a missed tick only delays one reload.
+// Shared reload state. The watcher bumps the token and records the last build
+// error; the reload endpoint serves both; the injected client reloads on a new
+// token and shows the error as an overlay while one exists. A plain struct is
+// enough for a dev tool: a missed tick only delays one reload.
 struct Reloader {
     token: Int,
+    error: String,
 }
 
 fun reloader() -> Reloader {
-    return Reloader { token: 0 }
+    return Reloader { token: 0, error: "" }
 }
 
-// The live-reload client. Polls `endpoint` once a second and reloads the page
-// when the token changes from the value present at load.
+// What the reload endpoint serves: the token, a newline, then the current
+// build error (empty when the last build was good).
+fun status_body(state: Reloader) -> String {
+    return state.token.to_string().concat("\n").concat(state.error)
+}
+
+// The live-reload client. Polls `endpoint` once a second; reloads when the
+// token changes, and shows or clears a build-error overlay. The error text
+// reaches the DOM through textContent only. Written without backslash
+// literals, double quotes, or template literals, like the rest of the owned
+// runtime.
 fun _reload_client(endpoint: String) -> String {
-    let out = "(function(){'use strict';var last=null;function poll(){"
-    out = out.concat("fetch('").concat(endpoint).concat(
-        "',{cache:'no-store'}).then(function(r){return r.text();})",
+    let out = "(function(){'use strict';var last=null;var nl=String.fromCharCode(10);"
+    out = out.concat(
+        "function clear(){var el=document.getElementById('__rw_overlay');if(el&&el.parentNode){el.parentNode.removeChild(el);}}",
+    )
+    out = out.concat("function show(msg){var el=document.getElementById('__rw_overlay');")
+    out = out.concat("if(!el){el=document.createElement('div');el.id='__rw_overlay';")
+    out = out.concat(
+        "el.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(12,12,16,0.96);color:#f4f4f5;overflow:auto;padding:2rem;font-family:ui-monospace,Consolas,monospace;';",
     )
     out = out.concat(
-        ".then(function(t){if(last===null){last=t;}else if(t!==last){location.reload();}})",
+        "var h=document.createElement('div');h.textContent='raven-web: build failed';h.style.cssText='font-weight:700;margin-bottom:1rem;color:#fda4af;';",
+    )
+    out = out.concat(
+        "var p=document.createElement('pre');p.id='__rw_overlay_text';p.style.cssText='white-space:pre-wrap;margin:0;font-size:0.9rem;line-height:1.5;';",
+    )
+    out = out.concat("el.appendChild(h);el.appendChild(p);document.body.appendChild(el);}")
+    out = out.concat("document.getElementById('__rw_overlay_text').textContent=msg;}")
+    out = out.concat("function poll(){fetch('").concat(endpoint).concat(
+        "',{cache:'no-store'}).then(function(r){return r.text();})",
+    )
+    out = out.concat(".then(function(t){var i=t.indexOf(nl);var tok=i<0?t:t.substring(0,i);")
+    out = out.concat("var err=i<0?'':t.substring(i+1);if(err===''){clear();}else{show(err);}")
+    out = out.concat(
+        "if(last===null){last=tok;}else if(err===''&&tok!==last){location.reload();}})",
     )
     out = out.concat(".catch(function(){});}")
     return out.concat("setInterval(poll,1000);poll();})();")
@@ -128,7 +159,7 @@ fun _serve_one(dir: String, endpoint: String, req: Request) -> Response {
 fun serve(dir: String, port: Int, state: Reloader) {
     let app = Server.new()
     let endpoint = "/__rw_reload"
-    app.get(endpoint, fun(req: Request) -> Response = Response.text(state.token.to_string()))
+    app.get(endpoint, fun(req: Request) -> Response = Response.text(status_body(state)))
     let handler = fun(req: Request) -> Response = _serve_one(dir, endpoint, req)
     app.get("/", handler)
     app.get("/:a", handler)
@@ -140,20 +171,58 @@ fun serve(dir: String, port: Int, state: Reloader) {
     app.listen("127.0.0.1:".concat(port.to_string()))
 }
 
+// Rewrite Windows separators to forward slashes so path checks see one shape.
+// Raven string literals make a backslash awkward, so the byte is compared
+// directly (92) and the rest of the path is copied as-is.
+fun _slashes(path: String) -> String {
+    let out = ""
+    let i = 0
+    while i < path.length() {
+        if path.byte_at(i) == 92 {
+            out = out.concat("/")
+        } else {
+            out = out.concat(path.substring(i, i + 1))
+        }
+        i += 1
+    }
+    return out
+}
+
+// Whether any path segment names an excluded directory, or the file is a
+// compiled executable. This is what keeps the build's own output (dist,
+// target) from retriggering the watcher forever.
+fun excluded(path: String, excludes: List<String>) -> Bool {
+    let clean = _slashes(path)
+    if clean.to_lower().ends_with(".exe") {
+        return true
+    }
+    for segment in clean.split("/") {
+        for name in excludes {
+            if segment == name && name != "" {
+                return true
+            }
+        }
+    }
+    return false
+}
+
 // A content signature of the watched files: their paths and contents joined.
-// Changing, adding, or removing a file changes the signature.
-fun _signature(paths: List<String>) -> String {
+// Changing, adding, or removing a file changes the signature. Entries whose
+// path hits `excludes` are ignored.
+fun _signature_excluding(paths: List<String>, excludes: List<String>) -> String {
     let out = ""
     for root in paths {
         match walk(root) {
             Ok(entries) -> {
                 for entry in entries {
-                    out = out.concat(entry).concat("|")
-                    match read(entry) {
-                        Ok(body) -> {
-                            out = out.concat(body).concat("\n")
-                        },
-                        Err(_) -> {},
+                    if !excluded(entry, excludes) {
+                        out = out.concat(entry).concat("|")
+                        match read(entry) {
+                            Ok(body) -> {
+                                out = out.concat(body).concat("\n")
+                            },
+                            Err(_) -> {},
+                        }
                     }
                 }
             },
@@ -168,6 +237,11 @@ fun _signature(paths: List<String>) -> String {
         }
     }
     return out
+}
+
+fun _signature(paths: List<String>) -> String {
+    let excludes: List<String> = []
+    return _signature_excluding(paths, excludes)
 }
 
 // Poll `paths` for changes; on each change run `rebuild` and bump the reload
@@ -185,4 +259,212 @@ fun watch(paths: List<String>, state: Reloader, rebuild: fun() -> Unit) {
             println("raven-web rebuilt; reloading")
         }
     }
+}
+
+// The subcommand for a generator invocation: argv[1], defaulting to "build".
+// Split out so it is testable without a real process argv.
+fun command_from(argv: List<String>) -> String {
+    if argv.len() < 2 {
+        return "build"
+    }
+    let name = argv.get(1)
+    if name == "" {
+        return "build"
+    }
+    return name
+}
+
+// The standard raven-web project harness. Wraps a site generator in a small
+// CLI (build, dev, serve, help), so every project gets the same workflow:
+//
+//   fun main() {
+//       cli("site.rv", "dist").run(fun() -> Unit {
+//           build()
+//       })
+//   }
+//
+// `entry` is the .rv file main lives in; dev mode recompiles it with the
+// raven compiler whenever a watched file changes, regenerates the output by
+// running the fresh executable with `build`, and live-reloads the browser. A
+// compile error appears in the browser as an overlay instead of a reload.
+struct Dev {
+    entry: String,
+    dist: String,
+    serve_port: Int,
+    extra: List<String>,
+}
+
+fun cli(entry: String, dist: String) -> Dev {
+    let extra: List<String> = []
+    return Dev { entry, dist, serve_port: 8080, extra }
+}
+
+impl Dev {
+    fun port(self, value: Int) -> Dev {
+        self.serve_port = value
+        return self
+    }
+
+    // Watch another path besides the entry file's directory (assets kept
+    // outside the project directory, a shared package).
+    fun watch(self, path: String) -> Dev {
+        self.extra.push(path)
+        return self
+    }
+
+    fun run(self, build: fun() -> Unit) {
+        let name = command_from(args())
+        if name == "build" {
+            _build_once(build)
+            return
+        }
+        if name == "serve" {
+            _build_once(build)
+            serve(self.dist, self.serve_port, reloader())
+            return
+        }
+        if name == "dev" {
+            if !is_file(self.entry) {
+                println("raven-web: entry file not found: ".concat(self.entry))
+                println("cli() needs the path of the .rv file your main lives in")
+                exit(1)
+            }
+            _build_once(build)
+            let state = reloader()
+            let entry = self.entry
+            let roots = self._watch_roots()
+            let excludes = self._excludes()
+            spawn(fun() -> Unit {
+                _watch_and_recompile(entry, roots, excludes, state)
+            })
+            println("raven-web dev: watching ".concat(_join_list(roots, ", ")))
+            serve(self.dist, self.serve_port, state)
+            return
+        }
+        if name == "help" {
+            _usage()
+            return
+        }
+        println("raven-web: unknown command ".concat(name))
+        _usage()
+        exit(1)
+    }
+
+    fun _watch_roots(self) -> List<String> {
+        let roots: List<String> = [dirname(self.entry)]
+        for path in self.extra {
+            roots.push(path)
+        }
+        return roots
+    }
+
+    fun _excludes(self) -> List<String> {
+        return [self.dist, "target", ".git", "node_modules"]
+    }
+}
+
+fun _join_list(items: List<String>, separator: String) -> String {
+    let out = ""
+    for item in items {
+        if out != "" {
+            out = out.concat(separator)
+        }
+        out = out.concat(item)
+    }
+    return out
+}
+
+fun _build_once(build: fun() -> Unit) {
+    let started = now_millis()
+    build()
+    println("raven-web: built in ".concat((now_millis() - started).to_string()).concat(" ms"))
+}
+
+fun _usage() {
+    println("usage: <site> [command]")
+    println("  build   generate the site into the output directory (default)")
+    println("  dev     build, serve with live reload, and rebuild on source changes")
+    println("  serve   build once and serve, without watching")
+    println("  help    show this message")
+}
+
+// Poll the watched roots; on a change, recompile the entry file and regenerate
+// the output. A failed compile lands in state.error, which the reload client
+// shows as an overlay; a good build clears it and bumps the token.
+fun _watch_and_recompile(
+    entry: String,
+    roots: List<String>,
+    excludes: List<String>,
+    state: Reloader,
+) {
+    let previous = _signature_excluding(roots, excludes)
+    while true {
+        sleep_millis(400)
+        let current = _signature_excluding(roots, excludes)
+        if current != previous {
+            previous = current
+            let started = now_millis()
+            match _recompile(entry) {
+                Ok(report) -> {
+                    state.error = ""
+                    state.token = state.token + 1
+                    let trimmed = report.trim()
+                    if trimmed != "" {
+                        println(trimmed)
+                    }
+                    println(
+                        "raven-web: rebuilt in ".concat((now_millis() - started).to_string()).concat(
+                            " ms; reloading",
+                        ),
+                    )
+                    // The regenerated output must not count as a source change.
+                    previous = _signature_excluding(roots, excludes)
+                },
+                Err(message) -> {
+                    state.error = message
+                    println("raven-web: build failed; the error is shown in the browser")
+                    println(message)
+                },
+            }
+        }
+    }
+}
+
+// Compile `entry` into a scratch executable and run it with `build`. Returns
+// the generator's stdout on success and the compiler's or generator's output
+// on failure. The scratch name is fixed and lives under target, which is
+// excluded from watching.
+fun _recompile(entry: String) -> Result<String, String> {
+    let _dir = create_dir_all("target")
+    let scratch = join("target", ".rw-dev.exe")
+    return match run("raven", ["build", entry, "-o", scratch]) {
+        Err(error) -> Err("could not run the raven compiler: ".concat(error.message)),
+        Ok(compile) -> {
+            if !compile.success() {
+                Err(_output_text(compile))
+            } else {
+                match run(scratch, ["build"]) {
+                    Err(error) -> Err("could not run the rebuilt generator: ".concat(error.message)),
+                    Ok(regen) -> {
+                        if !regen.success() {
+                            Err(_output_text(regen))
+                        } else {
+                            Ok(regen.stdout)
+                        }
+                    },
+                }
+            }
+        },
+    }
+}
+
+fun _output_text(out: Output) -> String {
+    let text = out.stderr.trim()
+    if text == "" {
+        return out.stdout.trim()
+    }
+    if out.stdout.trim() == "" {
+        return text
+    }
+    return text.concat("\n").concat(out.stdout.trim())
 }

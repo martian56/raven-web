@@ -17,10 +17,55 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.11.0"
+"github.com/martian56/raven-web" = "v0.12.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
+
+## Quickstart
+
+One file is a whole project. Save this as `site.rv` next to the `rv.toml`
+above (or copy `examples/starter.rv`):
+
+```rust
+import std/io { println }
+import "github.com/martian56/raven-web" { Behavior, Node, Page, signal }
+import "github.com/martian56/raven-web/dev" { cli }
+
+fun build() {
+    let count = signal("count", "0")
+    let page = Page.new(
+        "Hello",
+        Node.main_node().child(Node.h1().child_text("Hello from Raven")).child(
+            Node.button("+1").on_click(Behavior.new().increment(count, 1)),
+        ).child(Node.strong().text_of(count)),
+    ).signal(count)
+    match page.write_static("dist") {
+        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    cli("site.rv", "dist").run(fun() -> Unit {
+        build()
+    })
+}
+```
+
+Two commands from there:
+
+```text
+raven build site.rv -o site.exe
+./site.exe dev
+```
+
+Open http://localhost:8080. Edit `site.rv` and save: the harness recompiles
+it, regenerates the site, and the browser reloads. Break the syntax and save:
+the compiler error appears in the browser until you fix it. When you are done,
+`./site.exe` writes `dist/`, which deploys to any static host.
+
+The long-form walkthrough is [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
 ## The developer model
 
@@ -40,11 +85,17 @@ Raven Web is tested with Raven 2.26.1 on Linux and Windows.
   reload. `Site` and `Layout` build multi-page sites with a shared shell,
   clean-URL routing, a sitemap, and a 404 page.
 - `Stylesheet`, `CssRule`, and `Theme` build authored CSS and design tokens.
-- The `dev` module (`serve`, `watch`) runs a local server with live reload.
+- The `dev` module wraps a project in a standard CLI (`cli`): build, serve,
+  and a dev mode that recompiles your source on save, live-reloads the
+  browser, and shows compile errors as a browser overlay.
 
-Builders are infallible and silently reject unsafe input (an invalid tag, URL,
-attribute, or selector is dropped). Each has a `try_*` twin that returns a
-`Result` when you want the rejection signalled.
+Builders are infallible and reject unsafe input (an invalid tag, URL,
+attribute, or selector is dropped rather than emitted). Every drop is
+recorded: `write_static` prints each one as `raven-web warning: ...`,
+`Page.warnings()` returns them, and `Page.strict()` makes `write_static`
+refuse to write while any exists, which is what a CI build wants. Each builder
+also has a `try_*` twin that returns a `Result` when one call site wants the
+rejection as a value.
 
 ```rust
 import "github.com/martian56/raven-web" { Behavior, Component, Node, Page, Stylesheet }
@@ -211,9 +262,11 @@ backs that up:
 - The generated JS is always an external file, so page data cannot break out of
   a `<script>` tag.
 
-Rejections are silent by design (a `try_*` twin reports them instead), so an
-element or URL that breaks a rule renders as nothing rather than as an unsafe
-approximation.
+A rejected element or URL renders as nothing rather than as an unsafe
+approximation, and every rejection is recorded as a build warning:
+`write_static` prints them, `Page.warnings()` returns them, `Page.strict()`
+turns them into a failed build, and each builder's `try_*` twin reports one
+rejection as a `Result` at the call site.
 
 ## Expressions
 
@@ -363,25 +416,40 @@ Tokens are emitted as CSS custom properties (`var(--color-bg)`). Dark values
 apply under `prefers-color-scheme` and under an explicit `data-theme` attribute,
 which a `Behavior` can set for a manual toggle.
 
-## Dev server with live reload
+## The dev workflow
+
+`cli` wraps a site generator in the standard commands, so every raven-web
+project works the same way:
 
 ```rust
-import "github.com/martian56/raven-web/dev" { reloader, serve, watch }
+import "github.com/martian56/raven-web/dev" { cli }
 
 fun main() {
-    let state = reloader()
-    build()
-    spawn(fun() -> Unit {
-        watch(["src"], state, fun() -> Unit { build() })
+    cli("site.rv", "dist").run(fun() -> Unit {
+        build()
     })
-    serve("dist", 8080, state)
 }
 ```
 
-`serve` hosts the built directory and injects a live-reload client (generated,
-never handwritten). `watch` rebuilds on source change and refreshes the browser.
-The dev module is separate so a build-only project does not pull in the HTTP
-machinery.
+```text
+./site.exe          # generate the site (prints file count, time, warnings)
+./site.exe dev      # serve with live reload, rebuild on every source change
+./site.exe serve    # build once and serve, without watching
+./site.exe help     # usage
+```
+
+Dev mode watches the entry file's directory plus any `.watch(path)` extras,
+excluding the output directory, `target`, `.git`, `node_modules`, and compiled
+executables, so the build's own output never retriggers it. On a change it
+recompiles the entry file with the `raven` compiler, regenerates the output by
+running the fresh build, and reloads the browser. A compile error appears in
+the browser as a full-screen overlay (injected through `textContent`, never
+markup) and clears on the next good build. `.port(3000)` changes the port.
+
+The `raven` compiler must be on PATH for dev mode; plain `build` and `serve`
+never invoke it. The lower-level pieces (`reloader`, `serve`, `watch`,
+`inject_reload`) stay available for a custom loop, and the dev module is
+separate so a build-only project does not pull in the HTTP machinery.
 
 ## Output
 
@@ -393,6 +461,8 @@ than string-injected script.
 
 ## Examples
 
+- `examples/starter.rv`: the canonical single-file project (view, styles,
+  build, and the standard CLI). Copy it to start a new site.
 - `examples/landing.rv`: a self-contained 2.0 showcase (components, composition,
   inline behaviors, expanded effects).
 - `examples/components.rv`: reusable components with typed props and
@@ -407,7 +477,7 @@ than string-injected script.
   request.
 - `examples/bench.rv`: the page the performance numbers are measured on (200
   component instances plus a 500 row list).
-- `examples/dev.rv`: the build, watch, and serve dev loop.
+- `examples/dev.rv`: the standard dev loop via `cli` (build, dev, serve).
 - `examples/landing_v1_dashboard.rv.bak`: the earlier dashboard, kept for
   reference (uses the pre-2.0 API).
 

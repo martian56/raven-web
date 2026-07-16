@@ -1,5 +1,5 @@
 import std/test { assert_false, assert_true }
-import "./dev" { inject_reload, resolve_path }
+import "./dev" { Reloader, command_from, excluded, inject_reload, resolve_path, status_body }
 
 fun test_reload_injected_before_body() {
     let out = inject_reload("<html><body><h1>Hi</h1></body></html>", "/__rw_reload")
@@ -13,6 +13,43 @@ fun test_reload_injected_before_body() {
 fun test_reload_appended_when_no_body() {
     let out = inject_reload("<h1>no body</h1>", "/r")
     assert_true(out.ends_with("</script>"))
+}
+
+fun test_reload_client_carries_the_error_overlay() {
+    let out = inject_reload("<html><body></body></html>", "/__rw_reload")
+    // The overlay shows compiler output through textContent, never markup.
+    assert_true(out.contains("__rw_overlay"))
+    assert_true(out.contains("textContent"))
+    assert_false(out.contains("innerHTML"))
+    // A reload only happens while no error is being shown.
+    assert_true(out.contains("err===''&&tok!==last"))
+}
+
+fun test_status_body_is_token_then_error() {
+    let state = Reloader { token: 3, error: "" }
+    assert_true(status_body(state) == "3\n")
+    state.error = "line 4: expected }"
+    assert_true(status_body(state) == "3\nline 4: expected }")
+}
+
+fun test_command_defaults_to_build() {
+    assert_true(command_from(["site.exe"]) == "build")
+    assert_true(command_from(["site.exe", "dev"]) == "dev")
+    assert_true(command_from(["site.exe", "serve"]) == "serve")
+    let none: List<String> = []
+    assert_true(command_from(none) == "build")
+}
+
+fun test_excluded_skips_output_dirs_and_executables() {
+    let excludes = ["dist", "target", ".git", "node_modules"]
+    assert_true(excluded("./dist/index.html", excludes))
+    assert_true(excluded("target/.rw-dev.exe", excludes))
+    assert_true(excluded(".git/HEAD", excludes))
+    assert_true(excluded("site.exe", excludes))
+    assert_false(excluded("./site.rv", excludes))
+    assert_false(excluded("assets/logo.svg", excludes))
+    // A name that merely contains an excluded word is not excluded.
+    assert_false(excluded("distribution/notes.md", excludes))
 }
 
 fun test_resolve_path_maps_directories_and_guards_traversal() {

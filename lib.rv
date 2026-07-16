@@ -3,6 +3,7 @@
 import std/json { JsonValue, stringify }
 import std/fs { create_dir_all, dirname, join, write }
 import std/error { Error }
+import std/io { println }
 
 struct Attribute {
     name: String,
@@ -371,26 +372,49 @@ struct Node {
     // element that is refused because it executes code must not leave that code
     // behind as page text.
     dropped: Bool,
+    // One line per input this node dropped. Page.warnings() collects them from
+    // the whole tree, and write_static prints them, so a silent drop is still
+    // safe but no longer invisible.
+    warnings: List<String>,
 }
 
 fun _node(tag: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
     let binds: List<NodeBind> = []
-    return Node { tag, value: "", attrs, kids, binds, mark: -1, dropped: false }
+    let warnings: List<String> = []
+    return Node { tag, value: "", attrs, kids, binds, mark: -1, dropped: false, warnings }
 }
 
-fun _dropped_node() -> Node {
+fun _dropped_node(reason: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
     let binds: List<NodeBind> = []
-    return Node { tag: "", value: "", attrs, kids, binds, mark: -1, dropped: true }
+    let warnings: List<String> = [reason]
+    return Node { tag: "", value: "", attrs, kids, binds, mark: -1, dropped: true, warnings }
 }
 fun _text_node(value: String) -> Node {
     let attrs: List<Attribute> = []
     let kids: List<Node> = []
     let binds: List<NodeBind> = []
-    return Node { tag: "", value, attrs, kids, binds, mark: -1, dropped: false }
+    let warnings: List<String> = []
+    return Node { tag: "", value, attrs, kids, binds, mark: -1, dropped: false, warnings }
+}
+
+fun _quote_word(value: String) -> String {
+    return _quote().concat(value).concat(_quote())
+}
+
+// The tag as a warning names it: "<div>" for an element, "a text node" or "a
+// fragment" for the tagless kinds, so a message always says where it happened.
+fun _describe_node(node: Node) -> String {
+    if node.tag == "" {
+        if node.value == "" {
+            return "a fragment"
+        }
+        return "a text node"
+    }
+    return "<".concat(node.tag).concat(">")
 }
 
 fun _quote() -> String {
@@ -510,7 +534,11 @@ impl Node {
     // reject unsafe input. Use try_new to detect an invalid tag.
     fun new(tag: String) -> Node {
         if !_valid_tag(tag) {
-            return _dropped_node()
+            return _dropped_node(
+                "dropped element ".concat(_quote_word(tag)).concat(
+                    ": invalid or unsafe tag name; the element and its subtree render as nothing",
+                ),
+            )
         }
         return _node(tag.to_lower())
     }
@@ -798,6 +826,11 @@ impl Node {
     // last write wins.
     fun attr(self, name: String, value: String) -> Node {
         if !_valid_attr_name(name) {
+            self.warnings.push(
+                "dropped attribute ".concat(_quote_word(name)).concat(" on ").concat(_describe_node(self)).concat(
+                    ": invalid or executable attribute name",
+                ),
+            )
             return self
         }
         // A URL attribute set through the raw escape hatch is checked exactly
@@ -805,6 +838,11 @@ impl Node {
         // "javascript:...") would walk straight past the safety the typed
         // builders provide.
         if _url_attr(name.to_lower()) && !_safe_url(value) {
+            self.warnings.push(
+                "dropped attribute ".concat(_quote_word(name)).concat(" on ").concat(_describe_node(self)).concat(
+                    ": unsafe URL ",
+                ).concat(_quote_word(value)),
+            )
             return self
         }
         for existing in self.attrs {
@@ -838,7 +876,13 @@ impl Node {
     // click is intercepted.
     fun route_link(text: String, path: String) -> Node {
         if !_valid_route_pattern(path) {
-            return Node.fragment()
+            let out = Node.fragment()
+            out.warnings.push(
+                "dropped route_link ".concat(_quote_word(text)).concat(": invalid route path ").concat(
+                    _quote_word(path),
+                ),
+            )
+            return out
         }
         let clean = _normalize_path(path)
         return Node.link(text, clean).attr("data-rw-link", clean)
@@ -875,6 +919,9 @@ impl Node {
     // data attribute the generated runtime reads and interprets; the author
     // never writes JavaScript, and the value is escaped like any attribute.
     fun on(self, event: Event, behavior: Behavior) -> Node {
+        for warning in behavior.warnings {
+            self.warnings.push(warning)
+        }
         return self.attr("data-rw-".concat(event.name()), _serialize_behavior(behavior))
     }
 
@@ -957,6 +1004,11 @@ impl Node {
         if _safe_url(url) {
             return self.attr("href", url)
         }
+        self.warnings.push(
+            "dropped href on ".concat(_describe_node(self)).concat(": unsafe URL ").concat(
+                _quote_word(url),
+            ),
+        )
         return self
     }
 
@@ -964,6 +1016,11 @@ impl Node {
         if _safe_url(url) {
             return self.attr("src", url)
         }
+        self.warnings.push(
+            "dropped src on ".concat(_describe_node(self)).concat(": unsafe URL ").concat(
+                _quote_word(url),
+            ),
+        )
         return self
     }
 
@@ -983,6 +1040,13 @@ impl Node {
     // read-only view, so it is rejected rather than silently failing to write.
     fun bind_value(self, source: Signal) -> Node {
         if source.key != source.path {
+            self.warnings.push(
+                "dropped bind_value on ".concat(_describe_node(self)).concat(
+                    ": cannot model the field path ",
+                ).concat(_quote_word(source.path)).concat("; bind the whole signal ").concat(
+                    _quote_word(source.key),
+                ),
+            )
             return self
         }
         self.binds.push(_node_bind("value", source.path, ""))
@@ -1006,6 +1070,12 @@ impl Node {
     fun class_of(self, source: Signal, class_name: String) -> Node {
         if _valid_class_token(class_name) {
             self.binds.push(_node_bind("class", source.path, class_name))
+        } else {
+            self.warnings.push(
+                "dropped class_of on ".concat(_describe_node(self)).concat(": invalid class token ").concat(
+                    _quote_word(class_name),
+                ),
+            )
         }
         return self
     }
@@ -1013,6 +1083,12 @@ impl Node {
     fun attr_of(self, source: Signal, name: String) -> Node {
         if _valid_attr_name(name) {
             self.binds.push(_node_bind("attr", source.path, name))
+        } else {
+            self.warnings.push(
+                "dropped attr_of on ".concat(_describe_node(self)).concat(
+                    ": invalid or executable attribute name ",
+                ).concat(_quote_word(name)),
+            )
         }
         return self
     }
@@ -1048,6 +1124,12 @@ impl Node {
     fun class_when(self, cond: Expr, class_name: String) -> Node {
         if _valid_class_token(class_name) {
             self.binds.push(_node_bind_expr("class", cond, class_name))
+        } else {
+            self.warnings.push(
+                "dropped class_when on ".concat(_describe_node(self)).concat(": invalid class token ").concat(
+                    _quote_word(class_name),
+                ),
+            )
         }
         return self
     }
@@ -1055,6 +1137,12 @@ impl Node {
     fun attr_expr(self, value: Expr, name: String) -> Node {
         if _valid_attr_name(name) {
             self.binds.push(_node_bind_expr("attr", value, name))
+        } else {
+            self.warnings.push(
+                "dropped attr_expr on ".concat(_describe_node(self)).concat(
+                    ": invalid or executable attribute name ",
+                ).concat(_quote_word(name)),
+            )
         }
         return self
     }
@@ -1079,18 +1167,28 @@ impl Node {
     fun aria_bind(self, bind: NodeBind, name: String) -> Node {
         if _valid_attr_name("aria-".concat(name)) {
             self.binds.push(bind)
+        } else {
+            self.warnings.push(
+                "dropped aria binding on ".concat(_describe_node(self)).concat(": invalid ARIA state name ").concat(
+                    _quote_word(name),
+                ),
+            )
         }
         return self
     }
 
-    // Repeat `template` once per item of the array in `source`.
+    // Repeat `template` once per item of the array in `source`. The template is
+    // rendered to a string here, so its warnings are carried over before the
+    // tree is gone.
     fun each_of(self, source: Signal, template: Node) -> Node {
+        _collect_warnings(template, self.warnings)
         self.binds.push(_node_bind("list", source.path, template.render()))
         return self
     }
 
     // each_of, but only items whose `field` equals `value` (board columns).
     fun each_where(self, source: Signal, template: Node, field: String, value: String) -> Node {
+        _collect_warnings(template, self.warnings)
         let dep_keys: List<String> = [_root_key(source.path)]
         self.binds.push(
             NodeBind {
@@ -1219,11 +1317,15 @@ struct CssDeclaration {
 struct CssRule {
     selector: String,
     declarations: List<CssDeclaration>,
+    // Dropped inputs, merged into the Stylesheet this rule is added to.
+    warnings: List<String>,
 }
 
 struct Stylesheet {
     rules: List<CssRule>,
     raw_blocks: List<String>,
+    // Dropped inputs, collected by Page.warnings() through with_styles.
+    warnings: List<String>,
 }
 
 // Append the classes of `extra` that `current` does not already carry, so
@@ -1296,9 +1398,13 @@ impl CssRule {
     fun new(selector: String) -> CssRule {
         let declarations: List<CssDeclaration> = []
         if !_css_safe_text(selector) {
-            return CssRule { selector: "", declarations }
+            let warnings: List<String> = [
+                "dropped CSS rule: invalid selector ".concat(_quote_word(selector)),
+            ]
+            return CssRule { selector: "", declarations, warnings }
         }
-        return CssRule { selector, declarations }
+        let warnings: List<String> = []
+        return CssRule { selector, declarations, warnings }
     }
 
     fun try_new(selector: String) -> Result<CssRule, String> {
@@ -1306,7 +1412,8 @@ impl CssRule {
             return Err("invalid CSS selector")
         }
         let declarations: List<CssDeclaration> = []
-        return Ok(CssRule { selector, declarations })
+        let warnings: List<String> = []
+        return Ok(CssRule { selector, declarations, warnings })
     }
 
     fun class_name(name: String) -> CssRule {
@@ -1326,9 +1433,19 @@ impl CssRule {
     }
 
     fun set(self, property: String, value: String) -> CssRule {
-        if _valid_css_property(property) && _css_safe_text(value) {
-            self.declarations.push(CssDeclaration { property, value })
+        if !_valid_css_property(property) {
+            self.warnings.push("dropped CSS declaration: invalid property ".concat(_quote_word(property)))
+            return self
         }
+        if !_css_safe_text(value) {
+            self.warnings.push(
+                "dropped CSS declaration ".concat(_quote_word(property)).concat(": invalid value ").concat(
+                    _quote_word(value),
+                ),
+            )
+            return self
+        }
+        self.declarations.push(CssDeclaration { property, value })
         return self
     }
 
@@ -1361,12 +1478,28 @@ impl Stylesheet {
     fun new() -> Stylesheet {
         let rules: List<CssRule> = []
         let raw_blocks: List<String> = []
-        return Stylesheet { rules, raw_blocks }
+        let warnings: List<String> = []
+        return Stylesheet { rules, raw_blocks, warnings }
     }
 
     fun add(self, rule: CssRule) -> Stylesheet {
         self.rules.push(rule)
         return self
+    }
+
+    // Every dropped input in the sheet and its rules. Read at collection time,
+    // so a declaration dropped after add() is still seen.
+    fun all_warnings(self) -> List<String> {
+        let out: List<String> = []
+        for warning in self.warnings {
+            out.push(warning)
+        }
+        for rule in self.rules {
+            for warning in rule.warnings {
+                out.push(warning)
+            }
+        }
+        return out
     }
 
     // Raw CSS is an explicit build-time escape hatch for authored CSS.
@@ -1484,6 +1617,8 @@ struct FetchSpec {
     into_state: String,
     then: List<Effect>,
     on_error: List<Effect>,
+    // Dropped inputs, merged into the Behavior that sends this request.
+    warnings: List<String>,
 }
 
 enum Effect {
@@ -1515,6 +1650,15 @@ enum Effect {
 struct Behavior {
     effects: List<Effect>,
     prevent: Bool,
+    // One line per effect this behavior dropped. Node.on merges them into the
+    // element, so Page.warnings() sees them.
+    warnings: List<String>,
+}
+
+fun _warn_effect(warnings: List<String>, method: String, reason: String, value: String) {
+    warnings.push(
+        "dropped ".concat(method).concat(": ").concat(reason).concat(" ").concat(_quote_word(value)),
+    )
 }
 
 fun _valid_class_token(value: String) -> Bool {
@@ -1538,6 +1682,7 @@ fun request(method: String, url: String) -> FetchSpec {
     let body_fields: List<BodyField> = []
     let then: List<Effect> = []
     let on_error: List<Effect> = []
+    let warnings: List<String> = []
     return FetchSpec {
         method: method.to_upper(),
         url,
@@ -1546,6 +1691,7 @@ fun request(method: String, url: String) -> FetchSpec {
         into_state: "",
         then,
         on_error,
+        warnings,
     }
 }
 
@@ -1554,6 +1700,8 @@ impl FetchSpec {
     fun field(self, name: String, selector: String) -> FetchSpec {
         if _css_safe_text(selector) {
             self.body_fields.push(BodyField { name, selector, literal: "" })
+        } else {
+            _warn_effect(self.warnings, "fetch field", "invalid selector", selector)
         }
         return self
     }
@@ -1568,6 +1716,8 @@ impl FetchSpec {
     fun auth(self, state_key: String) -> FetchSpec {
         if _css_safe_text(state_key) {
             self.auth_state = state_key
+        } else {
+            _warn_effect(self.warnings, "fetch auth", "invalid state key", state_key)
         }
         return self
     }
@@ -1576,6 +1726,8 @@ impl FetchSpec {
     fun store(self, state_key: String) -> FetchSpec {
         if _css_safe_text(state_key) {
             self.into_state = state_key
+        } else {
+            _warn_effect(self.warnings, "fetch store", "invalid state key", state_key)
         }
         return self
     }
@@ -1592,6 +1744,9 @@ impl FetchSpec {
     }
 
     fun on_ok(self, behavior: Behavior) -> FetchSpec {
+        for warning in behavior.warnings {
+            self.warnings.push(warning)
+        }
         for effect in behavior.effects {
             self.then.push(effect)
         }
@@ -1599,6 +1754,9 @@ impl FetchSpec {
     }
 
     fun on_error(self, behavior: Behavior) -> FetchSpec {
+        for warning in behavior.warnings {
+            self.warnings.push(warning)
+        }
         for effect in behavior.effects {
             self.on_error.push(effect)
         }
@@ -1608,7 +1766,8 @@ impl FetchSpec {
 
 fun behavior() -> Behavior {
     let effects: List<Effect> = []
-    return Behavior { effects, prevent: false }
+    let warnings: List<String> = []
+    return Behavior { effects, prevent: false, warnings }
 }
 
 impl Behavior {
@@ -1625,6 +1784,8 @@ impl Behavior {
     fun set_text(self, selector: String, value: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.SetText(selector, value))
+        } else {
+            _warn_effect(self.warnings, "set_text", "invalid selector", selector)
         }
         return self
     }
@@ -1632,41 +1793,69 @@ impl Behavior {
     fun set_value(self, selector: String, value: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.SetValue(selector, value))
+        } else {
+            _warn_effect(self.warnings, "set_value", "invalid selector", selector)
         }
         return self
     }
 
     fun set_attribute(self, selector: String, name: String, value: String) -> Behavior {
-        if _css_safe_text(selector) && _valid_attr_name(name) {
-            self.effects.push(Effect.SetAttribute(selector, name, value))
+        if !_css_safe_text(selector) {
+            _warn_effect(self.warnings, "set_attribute", "invalid selector", selector)
+            return self
         }
+        if !_valid_attr_name(name) {
+            _warn_effect(self.warnings, "set_attribute", "invalid or executable attribute name", name)
+            return self
+        }
+        self.effects.push(Effect.SetAttribute(selector, name, value))
         return self
     }
 
     fun add_class(self, selector: String, class_name: String) -> Behavior {
-        if _css_safe_text(selector) && _valid_class_token(class_name) {
-            self.effects.push(Effect.AddClass(selector, class_name))
+        if !_css_safe_text(selector) {
+            _warn_effect(self.warnings, "add_class", "invalid selector", selector)
+            return self
         }
+        if !_valid_class_token(class_name) {
+            _warn_effect(self.warnings, "add_class", "invalid class token", class_name)
+            return self
+        }
+        self.effects.push(Effect.AddClass(selector, class_name))
         return self
     }
 
     fun remove_class(self, selector: String, class_name: String) -> Behavior {
-        if _css_safe_text(selector) && _valid_class_token(class_name) {
-            self.effects.push(Effect.RemoveClass(selector, class_name))
+        if !_css_safe_text(selector) {
+            _warn_effect(self.warnings, "remove_class", "invalid selector", selector)
+            return self
         }
+        if !_valid_class_token(class_name) {
+            _warn_effect(self.warnings, "remove_class", "invalid class token", class_name)
+            return self
+        }
+        self.effects.push(Effect.RemoveClass(selector, class_name))
         return self
     }
 
     fun toggle_class(self, selector: String, class_name: String) -> Behavior {
-        if _css_safe_text(selector) && _valid_class_token(class_name) {
-            self.effects.push(Effect.ToggleClass(selector, class_name))
+        if !_css_safe_text(selector) {
+            _warn_effect(self.warnings, "toggle_class", "invalid selector", selector)
+            return self
         }
+        if !_valid_class_token(class_name) {
+            _warn_effect(self.warnings, "toggle_class", "invalid class token", class_name)
+            return self
+        }
+        self.effects.push(Effect.ToggleClass(selector, class_name))
         return self
     }
 
     fun focus(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.Focus(selector))
+        } else {
+            _warn_effect(self.warnings, "focus", "invalid selector", selector)
         }
         return self
     }
@@ -1674,6 +1863,8 @@ impl Behavior {
     fun show(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.Show(selector))
+        } else {
+            _warn_effect(self.warnings, "show", "invalid selector", selector)
         }
         return self
     }
@@ -1681,6 +1872,8 @@ impl Behavior {
     fun hide(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.Hide(selector))
+        } else {
+            _warn_effect(self.warnings, "hide", "invalid selector", selector)
         }
         return self
     }
@@ -1688,6 +1881,8 @@ impl Behavior {
     fun toggle_visible(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.ToggleVisible(selector))
+        } else {
+            _warn_effect(self.warnings, "toggle_visible", "invalid selector", selector)
         }
         return self
     }
@@ -1697,6 +1892,8 @@ impl Behavior {
     fun navigate(self, url: String) -> Behavior {
         if _safe_url(url) {
             self.effects.push(Effect.Navigate(url))
+        } else {
+            _warn_effect(self.warnings, "navigate", "unsafe URL", url)
         }
         return self
     }
@@ -1706,6 +1903,8 @@ impl Behavior {
     fun go(self, path: String) -> Behavior {
         if _valid_route_pattern(path) {
             self.effects.push(Effect.Go(_normalize_path(path)))
+        } else {
+            _warn_effect(self.warnings, "go", "invalid route path", path)
         }
         return self
     }
@@ -1713,21 +1912,31 @@ impl Behavior {
     fun scroll_to(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.ScrollTo(selector))
+        } else {
+            _warn_effect(self.warnings, "scroll_to", "invalid selector", selector)
         }
         return self
     }
 
     // Copy the value or text of one element into another.
     fun copy_value(self, from_selector: String, to_selector: String) -> Behavior {
-        if _css_safe_text(from_selector) && _css_safe_text(to_selector) {
-            self.effects.push(Effect.CopyValue(from_selector, to_selector))
+        if !_css_safe_text(from_selector) {
+            _warn_effect(self.warnings, "copy_value", "invalid selector", from_selector)
+            return self
         }
+        if !_css_safe_text(to_selector) {
+            _warn_effect(self.warnings, "copy_value", "invalid selector", to_selector)
+            return self
+        }
+        self.effects.push(Effect.CopyValue(from_selector, to_selector))
         return self
     }
 
     fun copy_to_clipboard(self, selector: String) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.CopyToClipboard(selector))
+        } else {
+            _warn_effect(self.warnings, "copy_to_clipboard", "invalid selector", selector)
         }
         return self
     }
@@ -1738,6 +1947,8 @@ impl Behavior {
     fun set_state(self, key: String, value: String) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.SetState(key, value))
+        } else {
+            _warn_effect(self.warnings, "set_state", "invalid state key", key)
         }
         return self
     }
@@ -1745,6 +1956,8 @@ impl Behavior {
     fun toggle_state(self, key: String) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.ToggleState(key))
+        } else {
+            _warn_effect(self.warnings, "toggle_state", "invalid state key", key)
         }
         return self
     }
@@ -1752,6 +1965,8 @@ impl Behavior {
     fun increment_state(self, key: String, by: Int) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.IncrementState(key, by))
+        } else {
+            _warn_effect(self.warnings, "increment_state", "invalid state key", key)
         }
         return self
     }
@@ -1759,6 +1974,8 @@ impl Behavior {
     fun clear_state(self, key: String) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.ClearState(key))
+        } else {
+            _warn_effect(self.warnings, "clear_state", "invalid state key", key)
         }
         return self
     }
@@ -1785,8 +2002,13 @@ impl Behavior {
     // Send a typed HTTP request. raven-web generates the fetch, the JSON body
     // from the named inputs, and the Bearer header; the author writes no JS.
     fun fetch(self, spec: FetchSpec) -> Behavior {
+        for warning in spec.warnings {
+            self.warnings.push(warning)
+        }
         if _safe_url(spec.url) || spec.url.starts_with("/") {
             self.effects.push(Effect.Fetch(spec))
+        } else {
+            _warn_effect(self.warnings, "fetch", "unsafe URL", spec.url)
         }
         return self
     }
@@ -2171,6 +2393,17 @@ fun _mark_selector(mark: Int) -> String {
     return "[data-rw-b=\"".concat(mark.to_string()).concat("\"]")
 }
 
+// Gather every warning in the tree, depth first. Dropped nodes stay in their
+// parent's kids list precisely so this walk still reaches them.
+fun _collect_warnings(node: Node, out: List<String>) {
+    for warning in node.warnings {
+        out.push(warning)
+    }
+    for kid in node.kids {
+        _collect_warnings(kid, out)
+    }
+}
+
 fun _collect_binds(node: Node, out: List<Binding>) {
     if node.mark >= 0 {
         let selector = _mark_selector(node.mark)
@@ -2320,6 +2553,10 @@ struct Page {
     persisted: List<String>,
     load_effects: List<Effect>,
     single_page: Bool,
+    // Page-level dropped inputs; warnings() adds the tree's and the styles'.
+    page_warnings: List<String>,
+    // With strict set, write_static refuses to write while any warning exists.
+    strict_mode: Bool,
 }
 
 struct StaticOutput {
@@ -2380,6 +2617,12 @@ fun _empty_effects() -> List<Effect> {
     return effects
 }
 
+fun _warn_binding(method: String, selector: String, key: String) -> String {
+    return "dropped ".concat(method).concat(": invalid selector or key (selector ").concat(
+        _quote_word(selector),
+    ).concat(", key ").concat(_quote_word(key)).concat(")")
+}
+
 fun _valid_language(value: String) -> Bool {
     if value.length() == 0 || !_ascii_letter(value.byte_at(0)) {
         return false
@@ -2398,6 +2641,7 @@ fun _valid_language(value: String) -> Bool {
 impl Page {
     // Components cross the package boundary as their rendered Node value.
     fun new(title: String, root: Node) -> Page {
+        let page_warnings: List<String> = []
         return Page {
             title,
             root,
@@ -2412,7 +2656,31 @@ impl Page {
             persisted: _empty_persisted(),
             load_effects: _empty_effects(),
             single_page: false,
+            page_warnings,
+            strict_mode: false,
         }
+    }
+
+    // Refuse to write while any warning exists. This is what a CI build wants:
+    // a dropped input fails the build instead of shipping a page that silently
+    // does less than the source says.
+    fun strict(self) -> Page {
+        self.strict_mode = true
+        return self
+    }
+
+    // Every dropped input this page knows about: its own, the view tree's, and
+    // the stylesheet's. Empty means every builder call did what it said.
+    fun warnings(self) -> List<String> {
+        let out: List<String> = []
+        for warning in self.page_warnings {
+            out.push(warning)
+        }
+        _collect_warnings(self.root, out)
+        for warning in self.styles.all_warnings() {
+            out.push(warning)
+        }
+        return out
     }
 
     // Mark the page as a client-routed app, so write_static also emits 404.html
@@ -2428,6 +2696,8 @@ impl Page {
     fun state(self, key: String, initial: String) -> Page {
         if _css_safe_text(key) {
             self.state.push(StatePair { key, value: initial, raw: false })
+        } else {
+            self.page_warnings.push("dropped state declaration: invalid key ".concat(_quote_word(key)))
         }
         return self
     }
@@ -2437,6 +2707,9 @@ impl Page {
     // string.
     fun signal(self, source: Signal) -> Page {
         if !_css_safe_text(source.key) {
+            self.page_warnings.push(
+                "dropped signal registration: invalid key ".concat(_quote_word(source.key)),
+            )
             return self
         }
         self.state.push(StatePair { key: source.key, value: source.initial, raw: source.raw })
@@ -2449,6 +2722,8 @@ impl Page {
     fun data(self, key: String, value: JsonValue) -> Page {
         if _css_safe_text(key) {
             self.state.push(StatePair { key, value: stringify(value), raw: true })
+        } else {
+            self.page_warnings.push("dropped data: invalid key ".concat(_quote_word(key)))
         }
         return self
     }
@@ -2469,6 +2744,8 @@ impl Page {
     fun bind_text(self, selector: String, key: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
             self.bindings.push(_binding("text", selector, key, ""))
+        } else {
+            self.page_warnings.push(_warn_binding("bind_text", selector, key))
         }
         return self
     }
@@ -2476,6 +2753,8 @@ impl Page {
     fun bind_class(self, selector: String, key: String, class_name: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) && _valid_class_token(class_name) {
             self.bindings.push(_binding("class", selector, key, class_name))
+        } else {
+            self.page_warnings.push(_warn_binding("bind_class", selector, key))
         }
         return self
     }
@@ -2483,6 +2762,8 @@ impl Page {
     fun bind_attr(self, selector: String, key: String, attr: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) && _valid_attr_name(attr) {
             self.bindings.push(_binding("attr", selector, key, attr))
+        } else {
+            self.page_warnings.push(_warn_binding("bind_attr", selector, key))
         }
         return self
     }
@@ -2490,6 +2771,8 @@ impl Page {
     fun bind_visible(self, selector: String, key: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
             self.bindings.push(_binding("visible", selector, key, ""))
+        } else {
+            self.page_warnings.push(_warn_binding("bind_visible", selector, key))
         }
         return self
     }
@@ -2499,6 +2782,8 @@ impl Page {
     fun bind_hidden(self, selector: String, key: String) -> Page {
         if _css_safe_text(selector) && _css_safe_text(key) {
             self.bindings.push(_binding("hidden", selector, key, ""))
+        } else {
+            self.page_warnings.push(_warn_binding("bind_hidden", selector, key))
         }
         return self
     }
@@ -2506,6 +2791,9 @@ impl Page {
     // Run `behavior` once after the page loads and persisted state is restored,
     // so a view can fetch its data without the user clicking anything.
     fun on_load(self, behavior: Behavior) -> Page {
+        for warning in behavior.warnings {
+            self.page_warnings.push(warning)
+        }
         for effect in behavior.effects {
             self.load_effects.push(effect)
         }
@@ -2517,8 +2805,11 @@ impl Page {
     // field. Substitution goes through textContent and setAttribute, never
     // innerHTML, so item data can never inject markup.
     fun bind_list(self, selector: String, key: String, template: Node) -> Page {
+        _collect_warnings(template, self.page_warnings)
         if _css_safe_text(selector) && _css_safe_text(key) {
             self.bindings.push(_binding("list", selector, key, template.render()))
+        } else {
+            self.page_warnings.push(_warn_binding("bind_list", selector, key))
         }
         return self
     }
@@ -2532,6 +2823,7 @@ impl Page {
         field: String,
         value: String,
     ) -> Page {
+        _collect_warnings(template, self.page_warnings)
         if _css_safe_text(selector) && _css_safe_text(key) {
             let dep_keys: List<String> = [_root_key(key)]
             self.bindings.push(
@@ -2546,6 +2838,8 @@ impl Page {
                     dep_keys,
                 },
             )
+        } else {
+            self.page_warnings.push(_warn_binding("bind_list_where", selector, key))
         }
         return self
     }
@@ -2559,6 +2853,8 @@ impl Page {
     fun persist_key(self, key: String) -> Page {
         if _css_safe_text(key) {
             self.persisted.push(key)
+        } else {
+            self.page_warnings.push("dropped persist: invalid state key ".concat(_quote_word(key)))
         }
         return self
     }
@@ -2576,6 +2872,8 @@ impl Page {
     fun lang(self, value: String) -> Page {
         if _valid_language(value) {
             self.language = value
+        } else {
+            self.page_warnings.push("dropped lang: invalid language tag ".concat(_quote_word(value)))
         }
         return self
     }
@@ -2588,6 +2886,8 @@ impl Page {
     fun favicon(self, url: String) -> Page {
         if _safe_url(url) {
             self.favicon = url
+        } else {
+            self.page_warnings.push("dropped favicon: unsafe URL ".concat(_quote_word(url)))
         }
         return self
     }
@@ -2595,6 +2895,10 @@ impl Page {
     fun file(self, file: StaticFile) -> Page {
         if _valid_static_path(file.path) {
             self.files.push(file)
+        } else {
+            self.page_warnings.push(
+                "dropped static file: invalid or reserved path ".concat(_quote_word(file.path)),
+            )
         }
         return self
     }
@@ -2607,7 +2911,11 @@ impl Page {
                 self.files.push(file)
                 self.css_links.push(href)
             },
-            Err(_) -> {},
+            Err(reason) -> {
+                self.page_warnings.push(
+                    "dropped css_file ".concat(_quote_word(path)).concat(": ").concat(reason),
+                )
+            },
         }
         return self
     }
@@ -2615,6 +2923,8 @@ impl Page {
     fun link_stylesheet(self, url: String) -> Page {
         if _safe_url(url) {
             self.css_links.push(url)
+        } else {
+            self.page_warnings.push("dropped link_stylesheet: unsafe URL ".concat(_quote_word(url)))
         }
         return self
     }
@@ -2665,6 +2975,22 @@ impl Page {
     }
 
     fun write_static(self, dir: String) -> Result<StaticOutput, Error> {
+        // Dropped inputs surface at the build boundary: printed always, fatal
+        // under strict(). This is the loud end of the infallible builder API.
+        let warns = self.warnings()
+        for warning in warns {
+            println("raven-web warning: ".concat(warning))
+        }
+        if self.strict_mode && warns.len() > 0 {
+            return Err(
+                Error {
+                    kind: "raven-web",
+                    message: "strict page has ".concat(warns.len().to_string()).concat(
+                        " warning(s); first: ",
+                    ).concat(warns.get(0)),
+                },
+            )
+        }
         let _created = create_dir_all(dir)?
         let paths: List<String> = []
         let _html = write(join(dir, "index.html"), self.html())?
@@ -2905,12 +3231,15 @@ struct RouteView {
 struct Router {
     routes: List<RouteView>,
     missing: Option<Node>,
+    // Dropped routes and guards, carried into the Node built by to_node().
+    warnings: List<String>,
 }
 
 impl Router {
     fun new() -> Router {
         let routes: List<RouteView> = []
-        return Router { routes, missing: None }
+        let warnings: List<String> = []
+        return Router { routes, missing: None, warnings }
     }
 
     // Add a route. An invalid pattern is dropped, like every other builder here;
@@ -2919,6 +3248,12 @@ impl Router {
         if _valid_route_pattern(pattern) {
             self.routes.push(
                 RouteView { pattern: _normalize_path(pattern), view, guard_key: "", guard_to: "" },
+            )
+        } else {
+            self.warnings.push(
+                "dropped route: invalid pattern ".concat(_quote_word(pattern)).concat(
+                    "; its view is not reachable",
+                ),
             )
         }
         return self
@@ -2936,7 +3271,12 @@ impl Router {
     // This is a convenience, not a security boundary; the data still has to be
     // protected by the server.
     fun requires(self, source: Signal, redirect_to: String) -> Router {
-        if self.routes.len() == 0 || !_valid_route_pattern(redirect_to) {
+        if self.routes.len() == 0 {
+            self.warnings.push("dropped guard: requires() was called before any route")
+            return self
+        }
+        if !_valid_route_pattern(redirect_to) {
+            self.warnings.push("dropped guard: invalid redirect path ".concat(_quote_word(redirect_to)))
             return self
         }
         let last = self.routes.get(self.routes.len() - 1)
@@ -2964,6 +3304,9 @@ impl Router {
     // runtime picks one.
     fun to_node(self) -> Node {
         let out = Node.fragment()
+        for warning in self.warnings {
+            out.warnings.push(warning)
+        }
         for item in self.routes {
             // tabindex -1 keeps the container out of the tab order while still
             // letting the runtime move focus here on a navigation, which is
@@ -3041,6 +3384,8 @@ struct ThemeToken {
 // explicit data-theme attribute (which a Behavior can set for a manual toggle).
 struct Theme {
     tokens: List<ThemeToken>,
+    // Dropped tokens, carried into the Stylesheet built by stylesheet().
+    warnings: List<String>,
 }
 
 fun _valid_token_name(name: String) -> Bool {
@@ -3073,7 +3418,8 @@ fun _theme_vars(tokens: List<ThemeToken>, use_dark: Bool) -> String {
 
 fun theme() -> Theme {
     let tokens: List<ThemeToken> = []
-    return Theme { tokens }
+    let warnings: List<String> = []
+    return Theme { tokens, warnings }
 }
 
 impl Theme {
@@ -3083,9 +3429,15 @@ impl Theme {
 
     // A raw design token, emitted as the custom property --<name>.
     fun token(self, name: String, light: String, dark: String) -> Theme {
-        if _valid_token_name(name) && _css_safe_text(light) && _css_safe_text(dark) {
-            self.tokens.push(ThemeToken { name, light, dark })
+        if !_valid_token_name(name) {
+            self.warnings.push("dropped theme token: invalid name ".concat(_quote_word(name)))
+            return self
         }
+        if !_css_safe_text(light) || !_css_safe_text(dark) {
+            self.warnings.push("dropped theme token ".concat(_quote_word(name)).concat(": invalid value"))
+            return self
+        }
+        self.tokens.push(ThemeToken { name, light, dark })
         return self
     }
 
@@ -3109,6 +3461,10 @@ impl Theme {
     }
 
     fun stylesheet(self) -> Stylesheet {
-        return Stylesheet.new().raw(self.css())
+        let out = Stylesheet.new().raw(self.css())
+        for warning in self.warnings {
+            out.warnings.push(warning)
+        }
+        return out
     }
 }
