@@ -5016,3 +5016,108 @@ fun highlight(source: String, lang: String) -> Node {
     }
     return code
 }
+
+// ===== i18n =====
+//
+// The typed multi-language pattern proven on real sites: declare a locale
+// set once, then localize each page. localize() sets the lang, the canonical
+// URL, and the full hreflang alternate set (every locale plus x-default) in
+// one call, so a multilingual site stops hand-wiring SEO per page. Each
+// locale is served as its own path prefix ("" for the root language, "en"
+// for /en/), which is exactly what Site.page expects.
+
+struct Locale {
+    code: String,
+    prefix: String,
+}
+
+struct I18n {
+    site_url: String,
+    locales: List<Locale>,
+    default_index: Int,
+}
+
+fun i18n(site_url: String) -> I18n {
+    let locales: List<Locale> = []
+    return I18n { site_url, locales, default_index: 0 }
+}
+
+fun _strip_slashes(value: String) -> String {
+    let v = value.trim()
+    while v.starts_with("/") {
+        v = v.substring(1, v.length())
+    }
+    while v.ends_with("/") {
+        v = v.substring(0, v.length() - 1)
+    }
+    return v
+}
+
+impl I18n {
+    // The root language, served at "/". Call once; the first default wins.
+    fun default_locale(self, code: String) -> I18n {
+        self.locales.push(Locale { code, prefix: "" })
+        self.default_index = self.locales.len() - 1
+        return self
+    }
+
+    // Another language, served under "/<prefix>/" (e.g. locale("en", "en")).
+    fun locale(self, code: String, prefix: String) -> I18n {
+        self.locales.push(Locale { code, prefix: _strip_slashes(prefix) })
+        return self
+    }
+
+    fun all(self) -> List<Locale> {
+        return self.locales
+    }
+
+    // The Site route for a page at `subpath` in `locale`: "/", "/about",
+    // "/en", "/en/about". Pass this to Site.page.
+    fun route(self, locale: Locale, subpath: String) -> String {
+        let sub = _strip_slashes(subpath)
+        let parts: List<String> = []
+        if locale.prefix != "" {
+            parts.push(locale.prefix)
+        }
+        if sub != "" {
+            parts.push(sub)
+        }
+        if parts.len() == 0 {
+            return "/"
+        }
+        let out = ""
+        for part in parts {
+            out = out.concat("/").concat(part)
+        }
+        return out
+    }
+
+    // The clean canonical URL for `subpath` in `locale`, matching what Site
+    // emits (a trailing slash on every route).
+    fun url(self, locale: Locale, subpath: String) -> String {
+        let base = self.site_url
+        while base.ends_with("/") {
+            base = base.substring(0, base.length() - 1)
+        }
+        let route = self.route(locale, subpath)
+        if route == "/" {
+            return base.concat("/")
+        }
+        return base.concat(route).concat("/")
+    }
+
+    fun _default(self) -> Locale {
+        return self.locales.get(self.default_index)
+    }
+
+    // Set the page's lang, canonical URL, and hreflang alternates (every
+    // locale plus x-default) for `subpath` in `locale`. One call does the
+    // SEO wiring a multilingual page needs.
+    fun localize(self, page: Page, locale: Locale, subpath: String) -> Page {
+        let out = page.lang(locale.code).canonical(self.url(locale, subpath))
+        for other in self.locales {
+            let _ = out.alternate(other.code, self.url(other, subpath))
+        }
+        return out.alternate("x-default", self.url(self._default(), subpath))
+    }
+}
