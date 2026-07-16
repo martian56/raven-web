@@ -1,0 +1,103 @@
+// Starter: a personal portfolio. Copy, rename, run:
+//
+//   raven build portfolio.rv -o site.exe
+//   ./site.exe dev
+//   ./site.exe                # writes dist-portfolio/
+
+import std/io { println }
+import "../../lib" { Node, Page, Stylesheet, StaticFile }
+import "../../dev" { cli }
+
+struct Project {
+    name: String,
+    blurb: String,
+    url: String,
+    tags: List<String>,
+}
+
+fun projects() -> List<Project> {
+    return [
+        Project {
+            name: "Quanta",
+            blurb: "A small, fast database engine.",
+            url: "https://example.com/quanta",
+            tags: ["Rust", "Systems"],
+        },
+        Project {
+            name: "Loom",
+            blurb: "A terminal UI toolkit.",
+            url: "https://example.com/loom",
+            tags: ["TUI", "Library"],
+        },
+        Project {
+            name: "Atlas",
+            blurb: "A static maps renderer.",
+            url: "https://example.com/atlas",
+            tags: ["Graphics"],
+        },
+    ]
+}
+
+fun project_card(p: Project) -> Node {
+    let tags = Node.ul().class_name("tags")
+    for tag in p.tags {
+        let _ = tags.child(Node.li().child_text(tag))
+    }
+    return Node.new("a").href(p.url).class_name("card").child(Node.h3().child_text(p.name)).child(
+        Node.p().child_text(p.blurb),
+    ).child(tags)
+}
+
+fun view() -> Node {
+    let grid = Node.div().class_name("grid")
+    for p in projects() {
+        let _ = grid.child(project_card(p))
+    }
+    return Node.div().class_name("page").child(
+        Node.header().class_name("intro").child(
+            Node.p().class_name("eyebrow").child_text("Software engineer"),
+        ).child(Node.h1().child_text("Ada Lovelace")).child(
+            Node.p().class_name("bio").child_text(
+                "I build systems software and the tools around it. A few things I have shipped:",
+            ),
+        ),
+    ).child(Node.main_node().child(grid)).child(
+        Node.footer().class_name("foot").child(
+            Node.new("a").href("mailto:ada@example.com").child_text("ada@example.com"),
+        ).child_text("  /  ").child(
+            Node.new("a").href("https://github.com/example").child_text("GitHub"),
+        ),
+    )
+}
+
+fun styles() -> Stylesheet {
+    return Stylesheet.new().raw(
+        "*{margin:0;box-sizing:border-box}body{background:#faf9f6;color:#1a1a1a;font-family:system-ui,sans-serif;line-height:1.6}.page{max-width:52rem;margin:0 auto;padding:4rem 1.5rem}",
+    ).raw(
+        ".eyebrow{text-transform:uppercase;letter-spacing:0.15em;font-size:0.8rem;color:#6b7280}.intro h1{font-size:clamp(2.5rem,7vw,4rem);margin:0.5rem 0;letter-spacing:-0.03em}.bio{color:#4b5563;max-width:34rem;margin-top:1rem}",
+    ).raw(
+        ".grid{display:grid;gap:1.25rem;grid-template-columns:repeat(2,1fr);margin:3rem 0}.card{display:block;text-decoration:none;color:inherit;border:1px solid #e5e3dc;border-radius:14px;padding:1.5rem;transition:border-color 150ms}.card:hover{border-color:#1a1a1a}",
+    ).raw(
+        ".card h3{font-size:1.25rem}.card p{color:#4b5563;margin:0.4rem 0 0.8rem}.tags{display:flex;gap:0.5rem;flex-wrap:wrap;list-style:none}.tags li{font-size:0.75rem;border:1px solid #e5e3dc;border-radius:999px;padding:0.2rem 0.6rem;color:#6b7280}",
+    ).raw(
+        ".foot{color:#6b7280;border-top:1px solid #e5e3dc;padding-top:1.5rem}.foot a{color:inherit}@media(max-width:640px){.grid{grid-template-columns:1fr}}",
+    )
+}
+
+fun build() {
+    let page = Page.new("Ada Lovelace", view()).description(
+        "Portfolio of Ada Lovelace, software engineer.",
+    ).with_styles(styles()).file(StaticFile.new("robots.txt", "User-agent: *\nAllow: /\n")).strict()
+    match page.write_static("dist-portfolio") {
+        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    cli("examples/starters/portfolio.rv", "dist-portfolio").run(
+        fun() -> Unit {
+            build()
+        },
+    )
+}

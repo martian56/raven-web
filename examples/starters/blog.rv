@@ -1,0 +1,131 @@
+// Starter: a self-contained blog. Posts are inline markdown, so this file
+// runs with nothing else to copy. For a blog that loads posts from a folder
+// of .md files, see examples/blog.rv. Copy, rename, run:
+//
+//   raven build blog.rv -o site.exe
+//   ./site.exe dev
+//   ./site.exe                # writes dist-myblog/
+
+import std/io { println }
+import "../../lib" { FeedEntry, Node, Page, Site, StaticFile, Stylesheet, atom_feed, markdown, syntax_styles }
+import "../../dev" { cli }
+
+struct Post {
+    slug: String,
+    title: String,
+    date: String,
+    summary: String,
+    body: String,
+}
+
+fun posts() -> List<Post> {
+    return [
+        Post {
+            slug: "hello",
+            title: "Hello, world",
+            date: "2026-07-16",
+            summary: "Why this blog exists.",
+            body: "# Hello, world\n\nThis blog is built by **raven-web**. Each post is markdown, rendered through the safe builders, and the whole site is static files.\n\n- No JavaScript to write.\n- Finished HTML on first paint.\n- A feed and a sitemap, for free.",
+        },
+        Post {
+            slug: "static-first",
+            title: "Static first",
+            date: "2026-07-01",
+            summary: "The browser never waits on a script.",
+            body: "# Static first\n\nThe page is *complete* at build time.\n\n```raven\nlet page = Page.new(\"Post\", markdown(body))\n```\n\n> Content never waits on a script.",
+        },
+    ]
+}
+
+fun shell(title: String, body: Node) -> Node {
+    return Node.div().class_name("page").child(
+        Node.header().class_name("masthead").child(
+            Node.new("a").href("/").class_name("brand").child_text("The Example Blog"),
+        ),
+    ).child(body).child(
+        Node.footer().class_name("foot").child_text("Written in markdown, built by raven-web."),
+    )
+}
+
+fun index_body() -> Node {
+    let list = Node.ul().class_name("posts")
+    for post in posts() {
+        let _ = list.child(
+            Node.li().child(
+                Node.new("a").href("/posts/".concat(post.slug).concat("/")).class_name("post-title").child_text(
+                    post.title,
+                ),
+            ).child(Node.div().class_name("meta").child_text(post.date)).child(
+                Node.p().child_text(post.summary),
+            ),
+        )
+    }
+    return Node.main_node().child(Node.h1().child_text("Posts")).child(list)
+}
+
+fun post_body(post: Post) -> Node {
+    return Node.main_node().child(Node.new("article").child(markdown(post.body))).child(
+        Node.p().class_name("back").child(Node.new("a").href("/").child_text("Back to posts")),
+    )
+}
+
+fun styles() -> Stylesheet {
+    return syntax_styles().raw(
+        "*{margin:0;box-sizing:border-box}body{background:#fdfdfc;color:#1a1a1a;font-family:Georgia,serif;line-height:1.7}.page{max-width:42rem;margin:0 auto;padding:2rem 1.5rem}",
+    ).raw(
+        ".masthead{padding:1.5rem 0 2.5rem}.brand{font-weight:700;font-size:1.1rem;text-decoration:none;color:inherit;font-family:system-ui,sans-serif}",
+    ).raw(
+        ".posts{list-style:none}.posts li{padding:1.5rem 0;border-top:1px solid #ece9e2}.post-title{font-size:1.5rem;text-decoration:none;color:inherit}.post-title:hover{text-decoration:underline}.meta{color:#8a8577;font-size:0.85rem;font-family:system-ui,sans-serif;margin:0.3rem 0}",
+    ).raw(
+        "article h1{font-size:2.2rem;margin-bottom:1rem}article p{margin:1rem 0}article pre{background:#0d1117;color:#e6edf3;padding:1rem 1.25rem;border-radius:10px;overflow-x:auto;font-family:ui-monospace,monospace;font-size:0.85rem}article blockquote{border-left:3px solid #d1d5db;padding-left:1rem;color:#6b6b6b;font-style:italic}",
+    ).raw(
+        ".back{margin-top:2rem;font-family:system-ui,sans-serif}.foot{color:#8a8577;border-top:1px solid #ece9e2;margin-top:3rem;padding-top:1.5rem;font-size:0.85rem;font-family:system-ui,sans-serif}",
+    )
+}
+
+fun feed() -> String {
+    let entries: List<FeedEntry> = []
+    for post in posts() {
+        entries.push(
+            FeedEntry {
+                title: post.title,
+                url: "https://blog.example.com/posts/".concat(post.slug).concat("/"),
+                date: post.date,
+                summary: post.summary,
+            },
+        )
+    }
+    return atom_feed(
+        "The Example Blog",
+        "https://blog.example.com/",
+        "https://blog.example.com/feed.xml",
+        posts().get(0).date,
+        entries,
+    )
+}
+
+fun build() {
+    let site = Site.new("https://blog.example.com")
+    let index = Page.new("The Example Blog", shell("The Example Blog", index_body())).with_styles(
+        styles(),
+    ).file(StaticFile.new("feed.xml", feed())).strict()
+    let _ = site.page("/", index)
+    for post in posts() {
+        let page = Page.new(post.title, shell(post.title, post_body(post))).with_styles(styles()).description(
+            post.summary,
+        ).strict()
+        let _ = site.page("/posts/".concat(post.slug), page).lastmod(post.date)
+    }
+    match site.write_static("dist-myblog") {
+        Ok(out) -> println("wrote ".concat(out.page_count().to_string()).concat(" pages")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    cli("examples/starters/blog.rv", "dist-myblog").run(
+        fun() -> Unit {
+            build()
+        },
+    )
+}
