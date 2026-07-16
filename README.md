@@ -532,6 +532,10 @@ page.file(StaticFile.new("feed.xml", atom_feed(title, url, feed_url, updated, en
   newest first; `chunks(items, size)` splits for pagination.
 - `atom_feed(...)` builds an Atom feed from the same ISO dates frontmatter
   uses, escaped like everything else.
+- Markdown headings get a GitHub-style slug `id`, so in-page anchors work.
+  `headings(source)` extracts every heading (`level`, `text`, `slug`), and
+  `table_of_contents(source, min, max)` builds a `<nav class="toc">` of
+  anchor links for a level range.
 - Fenced code blocks are syntax-highlighted at build time (raven, rust,
   js/ts, go, python, c/c++/java, bash) into classed spans, no client JS;
   `highlight(code, lang)` does the same for a standalone snippet, and
