@@ -1,0 +1,97 @@
+// Starter: a marketing landing page. Copy this file, rename it, and run:
+//
+//   raven build landing.rv -o site.exe
+//   ./site.exe dev            # serve with live reload
+//   ./site.exe                # write dist-landing/
+//
+// In your own project the imports become:
+//   import "github.com/martian56/raven-web" { ... }
+//   import "github.com/martian56/raven-web/dev" { cli }
+
+import std/io { println }
+import "../../lib" { Behavior, Node, Page, Stylesheet, signal }
+import "../../dev" { cli }
+
+fun feature(title: String, body: String) -> Node {
+    return Node.article().class_name("feature").child(Node.h3().child_text(title)).child(
+        Node.p().child_text(body),
+    )
+}
+
+fun view() -> Node {
+    let open = signal("menu", "")
+    return Node.div().class_name("page").child(
+        Node.nav().class_name("nav").child(
+            Node.new("a").href("#top").class_name("brand").child_text("Northwind"),
+        ).child(Node.new("a").href("#start").class_name("btn").child_text("Get started")),
+    ).child(
+        Node.header().id("top").class_name("hero").child(
+            Node.h1().child_text("Ship your idea this week."),
+        ).child(
+            Node.p().class_name("lede").child_text(
+                "A starting point you own end to end. No framework tax, no build step to babysit.",
+            ),
+        ).child(
+            Node.div().class_name("cta").child(
+                Node.new("a").href("#start").class_name("btn btn-lg").child_text("Start free"),
+            ).child(
+                Node.button("See features").class_name("btn btn-ghost").on_click(
+                    Behavior.new().toggle(open),
+                ),
+            ),
+        ),
+    ).child(
+        Node.section().id("features").class_name("features").visible_if(open).child(
+            feature("Fast", "Finished HTML on first paint. Content never waits on a script."),
+        ).child(feature("Safe", "No element, attribute, or URL can execute. Ever.")).child(
+            feature("Small", "A fixed runtime under 4 KB gzipped, whatever you build."),
+        ),
+    ).child(
+        Node.section().id("start").class_name("closer").child(
+            Node.h2().child_text("Ready when you are."),
+        ).child(
+            Node.new("a").href("mailto:hello@example.com").class_name("btn btn-lg").child_text(
+                "Contact us",
+            ),
+        ),
+    ).child(Node.footer().class_name("foot").child_text("(c) 2026 Northwind"))
+}
+
+fun styles() -> Stylesheet {
+    return Stylesheet.new().raw(
+        "*{margin:0;box-sizing:border-box}body{background:#0b0c10;color:#e9e7e0;font-family:system-ui,sans-serif;line-height:1.6}",
+    ).raw(
+        ".page{max-width:64rem;margin:0 auto;padding:0 1.5rem}.nav{display:flex;justify-content:space-between;align-items:center;padding:1.5rem 0}",
+    ).raw(
+        ".brand{font-weight:700;font-size:1.2rem;text-decoration:none;color:inherit}.hero{padding:6rem 0 4rem}.hero h1{font-size:clamp(2.4rem,6vw,4rem);line-height:1.05;letter-spacing:-0.02em}",
+    ).raw(
+        ".lede{color:#9ba0ab;max-width:34rem;margin:1.25rem 0 2rem;font-size:1.15rem}.cta{display:flex;gap:1rem;flex-wrap:wrap}",
+    ).raw(
+        ".btn{display:inline-block;background:#e9e7e0;color:#0b0c10;text-decoration:none;font-weight:600;padding:0.7rem 1.4rem;border-radius:8px;border:0;cursor:pointer;font:inherit;font-weight:600}",
+    ).raw(
+        ".btn-lg{padding:0.9rem 1.8rem}.btn-ghost{background:transparent;color:#e9e7e0;border:1px solid #232733}.features{display:grid;gap:1.5rem;grid-template-columns:repeat(3,1fr);padding:2rem 0}",
+    ).raw(
+        ".feature{border:1px solid #232733;border-radius:12px;padding:1.5rem}.feature h3{margin-bottom:0.5rem}.feature p{color:#9ba0ab}",
+    ).raw(
+        ".closer{text-align:center;padding:5rem 0}.closer h2{font-size:2rem;margin-bottom:1.5rem}.foot{color:#9ba0ab;border-top:1px solid #232733;padding:2rem 0;font-size:0.9rem}",
+    ).raw("@media(max-width:640px){.features{grid-template-columns:1fr}}")
+}
+
+fun build() {
+    let open = signal("menu", "")
+    let page = Page.new("Northwind", view()).description("A raven-web landing page starter.").with_styles(
+        styles(),
+    ).signal(open).strict()
+    match page.write_static("dist-landing") {
+        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    cli("examples/starters/landing.rv", "dist-landing").run(
+        fun() -> Unit {
+            build()
+        },
+    )
+}
