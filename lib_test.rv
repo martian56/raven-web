@@ -1,6 +1,6 @@
 import std/fs { create_dir_all, exists, read, write }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, highlight, i18n, load_documents, markdown, parse_document, query_param, request, signal, sort_documents_desc, syntax_styles, transition_styles }
+import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, headings, highlight, i18n, load_documents, markdown, parse_document, table_of_contents, query_param, request, signal, sort_documents_desc, syntax_styles, transition_styles }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -1059,9 +1059,10 @@ fun test_frontmatter_parses_and_survives_edge_cases() {
 fun test_markdown_renders_block_structure() {
     let source = "# Title\n\nA paragraph that\nspans two lines.\n\n## Section\n\n- one\n- two\n\n1. first\n2. second\n\n> quoted *text*\n\n---\n\n```raven\nlet x = 1\n```"
     let html = markdown(source).render()
-    assert_true(html.contains("<h1>Title</h1>"))
+    // Headings now carry a slug id for anchors and a table of contents.
+    assert_true(html.contains("<h1 id=\"title\">Title</h1>"))
     assert_true(html.contains("<p>A paragraph that spans two lines.</p>"))
-    assert_true(html.contains("<h2>Section</h2>"))
+    assert_true(html.contains("<h2 id=\"section\">Section</h2>"))
     assert_true(html.contains("<ul><li>one</li><li>two</li></ul>"))
     assert_true(html.contains("<ol><li>first</li><li>second</li></ol>"))
     assert_true(html.contains("<blockquote>"))
@@ -1291,4 +1292,40 @@ fun test_i18n_localize_wires_lang_canonical_and_alternates() {
     let en_page = site.localize(Page.new("Home", Node.div()), en, "")
     assert_true(en_page.html().contains("rel=\"canonical\" href=\"https://example.com/en/\""))
     assert_true(en_page.html().contains("<html lang=\"en\""))
+}
+
+fun test_markdown_heading_ids_and_toc() {
+    let source = "# My Great Post!\n\nIntro.\n\n## Setup & Config\n\nStep one.\n\n## The `code` part\n\nDetails.\n\n### A sub-heading\n\nMore."
+    let html = markdown(source).render()
+    // GitHub-style slugs: lowercase, punctuation stripped, spaces to hyphens.
+    assert_true(html.contains("<h1 id=\"my-great-post\">"))
+    assert_true(html.contains("<h2 id=\"setup-config\">"))
+    assert_true(html.contains("<h2 id=\"the-code-part\">"))
+    assert_true(html.contains("<h3 id=\"a-sub-heading\">"))
+
+    // headings() extracts level, plain text, and slug.
+    let hs = headings(source)
+    assert_true(hs.len() == 4)
+    assert_true(hs.get(0).level == 1)
+    assert_true(hs.get(0).text == "My Great Post!")
+    assert_true(hs.get(0).slug == "my-great-post")
+    assert_true(hs.get(2).text == "The code part")
+
+    // table_of_contents builds a nav of anchor links for a level range.
+    let toc = table_of_contents(source, 2, 3).render()
+    assert_true(toc.contains("<nav class=\"toc\""))
+    assert_true(toc.contains("href=\"#setup-config\""))
+    assert_true(toc.contains("href=\"#the-code-part\""))
+    assert_true(toc.contains("href=\"#a-sub-heading\""))
+    assert_true(toc.contains("data-level=\"2\""))
+    // The h1 is outside the 2..3 range, so it is not in the TOC.
+    assert_false(toc.contains("href=\"#my-great-post\""))
+}
+
+fun test_markdown_headings_skip_fenced_code() {
+    let source = "# Real\n\n```\n# not a heading, it is code\n```\n\n## Also real"
+    let hs = headings(source)
+    assert_true(hs.len() == 2)
+    assert_true(hs.get(0).slug == "real")
+    assert_true(hs.get(1).slug == "also-real")
 }
