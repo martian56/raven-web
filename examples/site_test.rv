@@ -1,0 +1,48 @@
+// A worked example of testing a raven-web site, referenced by docs/TESTING.md.
+// In a real project these assertions live in a *_test.rv file run by
+// `rvpm test`; here they run from main() so the example is self-contained and
+// provable with `raven build examples/site_test.rv -o t.exe && ./t.exe`.
+
+import std/io { println }
+import std/test { assert_false, assert_true }
+import "../lib" { Behavior, Node, Page, signal }
+
+// The unit under test: a small page builder, exactly as a site would define
+// it. Tests assert over its emitted html(), css(), and warnings().
+fun home() -> Page {
+    let count = signal("count", "0")
+    let body = Node.main_node().child(Node.h1().child_text("Welcome")).child(
+        Node.button("+1").on_click(Behavior.new().increment(count, 1)),
+    ).child(Node.strong().text_of(count))
+    return Page.new("Home", body).description("A tested page.").signal(count)
+}
+
+// 1. Golden-HTML assertions: the emitted markup contains what it should.
+fun test_home_renders_expected_markup() {
+    let html = home().html()
+    assert_true(html.contains("<title>Home</title>"))
+    assert_true(html.contains("<h1>Welcome</h1>"))
+    assert_true(html.contains("data-rw-click="))
+    // And what it should not: nothing executable leaked in.
+    assert_false(html.contains("onclick"))
+}
+
+// 2. warnings() as a lint gate: a clean page drops nothing.
+fun test_home_has_no_warnings() {
+    assert_true(home().warnings().len() == 0)
+}
+
+// 3. A defect a test should catch: an unsafe URL is dropped, and loudly.
+fun test_unsafe_input_is_dropped_and_reported() {
+    let page = Node.div().child(Node.link("Bad", "javascript:alert(1)"))
+    let built = Page.new("X", page)
+    assert_false(built.html().contains("javascript:alert"))
+    assert_true(built.warnings().len() >= 1)
+}
+
+fun main() {
+    test_home_renders_expected_markup()
+    test_home_has_no_warnings()
+    test_unsafe_input_is_dropped_and_reported()
+    println("all assertions passed")
+}
