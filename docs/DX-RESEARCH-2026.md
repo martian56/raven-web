@@ -58,6 +58,17 @@ position is a good one to be in:
 
 ## 3. Scorecard
 
+> Progress note (2026-07-16): the scorecard below is the original v0.13.1
+> baseline. Since then v0.14.0 through v0.17.0 have closed most of the P0,
+> P1, and P2 gaps: head metadata, hreflang, sitemap dates, query params,
+> image discipline, asset fingerprinting, CSS minification, base-path
+> hosting, the markdown/frontmatter/collections/feed content pipeline,
+> syntax highlighting, key-filtered events, debounce, native dialogs, page
+> timers/polling, and transitions. What remains is an i18n helper doc and
+> the P3 developer-experience set (scaffolding, a testing guide, a component
+> cookbook). Read the rows as "what the baseline lacked", and the roadmap in
+> section 5 for what has since shipped.
+
 "Table stakes" below means: the leading tools in the class ship it first
 party or via a blessed plugin, and comparisons treat its absence as a reason
 to pick another tool.
