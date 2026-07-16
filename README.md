@@ -562,6 +562,26 @@ site with an index, clean post URLs, a dated sitemap, and a feed.
   `?tab=` as a signal under the reserved `query` key; the runtime re-parses
   it on load and on every navigation.
 
+## Starters
+
+Copyable templates to begin a new site from working code, not a blank file.
+Each is one self-contained file; copy it out, rename it, and run.
+
+- `examples/starters/landing.rv`: a marketing landing page (hero, toggled
+  feature grid, CTA).
+- `examples/starters/portfolio.rv`: a personal portfolio (intro, project
+  cards, contact).
+- `examples/starters/docs.rv`: a multi-page docs site with a shared sidebar
+  and markdown content.
+- `examples/starters/blog.rv`: a self-contained blog with inline markdown
+  posts, a sitemap, and an Atom feed.
+
+```text
+raven build examples/starters/landing.rv -o site.exe
+./site.exe dev        # serve with live reload
+./site.exe            # write the dist directory
+```
+
 ## Examples
 
 - `examples/blog.rv`: a markdown-driven blog: frontmatter, collections, clean URLs, a dated sitemap, and an Atom feed.

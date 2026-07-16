@@ -1,0 +1,100 @@
+// Starter: a multi-page documentation site with a shared sidebar and
+// markdown content. Copy, rename, run:
+//
+//   raven build docs.rv -o site.exe
+//   ./site.exe dev
+//   ./site.exe                # writes dist-docs/ (clean URLs per page)
+
+import std/io { println }
+import "../../lib" { Node, Page, Site, Stylesheet, markdown, syntax_styles }
+import "../../dev" { cli }
+
+struct Doc {
+    slug: String,
+    title: String,
+    body: String,
+}
+
+fun docs() -> List<Doc> {
+    return [
+        Doc {
+            slug: "",
+            title: "Getting started",
+            body: "# Getting started\n\nWelcome. Every page here is **markdown** rendered through the safe builders. Pick a topic from the sidebar.\n\n- Finished HTML on first paint.\n- Every link judged by scheme.\n- Raw HTML in a document is text, not markup.",
+        },
+        Doc {
+            slug: "install",
+            title: "Install",
+            body: "# Install\n\nAdd the dependency, then build:\n\n```bash\nrvpm build\n./site dev\n```\n\nThe dev server watches your source and reloads the browser on save.",
+        },
+        Doc {
+            slug: "guide",
+            title: "Your first page",
+            body: "# Your first page\n\nA page is a value. Return a `Node` tree and write it out:\n\n```raven\nlet page = Page.new(\"Hello\", Node.h1().child_text(\"Hi\"))\nmatch page.write_static(\"dist\") {\n    Ok(_) -> print(\"done\"),\n    Err(e) -> print(e.message()),\n}\n```\n\n> Fenced code blocks are highlighted at build time.",
+        },
+    ]
+}
+
+fun sidebar(active: String) -> Node {
+    let list = Node.ul()
+    for doc in docs() {
+        let href = if doc.slug == "" {
+            "/"
+        } else {
+            "/".concat(doc.slug).concat("/")
+        }
+        let link = Node.new("a").href(href).child_text(doc.title)
+        if doc.slug == active {
+            let _ = link.class_name("active")
+        }
+        let _ = list.child(Node.li().child(link))
+    }
+    return Node.new("aside").class_name("sidebar").child(
+        Node.div().class_name("logo").child_text("Docs"),
+    ).child(list)
+}
+
+fun page_for(doc: Doc) -> Page {
+    let body = Node.div().class_name("layout").child(sidebar(doc.slug)).child(
+        Node.main_node().class_name("doc").child(markdown(doc.body)),
+    )
+    return Page.new(doc.title, body).description("A raven-web docs starter.").with_styles(styles()).strict()
+}
+
+fun styles() -> Stylesheet {
+    return syntax_styles().raw(
+        "*{margin:0;box-sizing:border-box}body{background:#fff;color:#1a1a1a;font-family:system-ui,sans-serif;line-height:1.7}.layout{display:grid;grid-template-columns:16rem 1fr;min-height:100vh}",
+    ).raw(
+        ".sidebar{border-right:1px solid #eee;padding:2rem 1.5rem}.logo{font-weight:700;margin-bottom:1.5rem}.sidebar ul{list-style:none}.sidebar li{margin:0.4rem 0}.sidebar a{color:#4b5563;text-decoration:none}.sidebar a:hover,.sidebar a.active{color:#1a1a1a;font-weight:600}",
+    ).raw(
+        ".doc{padding:3rem;max-width:44rem}.doc h1{font-size:2.2rem;margin-bottom:1rem}.doc p{margin:0.75rem 0}.doc ul{margin:0.75rem 0 0.75rem 1.5rem}",
+    ).raw(
+        ".doc pre{background:#0d1117;color:#e6edf3;padding:1rem 1.25rem;border-radius:10px;overflow-x:auto;margin:1rem 0}.doc code{font-family:ui-monospace,Consolas,monospace;font-size:0.9em}.doc blockquote{border-left:3px solid #d1d5db;padding-left:1rem;color:#4b5563;margin:1rem 0}",
+    ).raw(
+        "@media(max-width:760px){.layout{grid-template-columns:1fr}.sidebar{border-right:0;border-bottom:1px solid #eee}.doc{padding:2rem 1.5rem}}",
+    )
+}
+
+fun build() {
+    let site = Site.new("https://docs.example.com")
+    for doc in docs() {
+        let route = if doc.slug == "" {
+            "/"
+        } else {
+            "/".concat(doc.slug)
+        }
+        let _ = site.page(route, page_for(doc))
+    }
+    match site.write_static("dist-docs") {
+        Ok(out) -> println("wrote ".concat(out.page_count().to_string()).concat(" pages")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    cli("examples/starters/docs.rv", "dist-docs").run(
+        fun() -> Unit {
+            build()
+        },
+    )
+}
