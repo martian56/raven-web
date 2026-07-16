@@ -1,6 +1,6 @@
 [package]
 name = "raven-web"
-version = "0.12.1"
+version = "0.12.2"
 edition = "v2"
 
 [dependencies]

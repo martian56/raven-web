@@ -329,6 +329,12 @@ impl Dev {
                 println("cli() needs the path of the .rv file your main lives in")
                 exit(1)
             }
+            // In a package project the server process is usually the rvpm
+            // output itself; move it aside now so rebuilds can relink.
+            match _package_app_name() {
+                Some(package) -> _move_self_aside(package),
+                None -> {},
+            }
             _build_once(build)
             let state = reloader()
             let entry = self.entry
@@ -465,6 +471,63 @@ fun _name_token(value: String) -> String {
     return out
 }
 
+// The application package this directory holds, if it is one: an rv.toml
+// with a name plus src/main.rv (rvpm only builds an executable for that
+// layout; an rv.toml alone may belong to a library, raven-web's own repo is
+// one).
+fun _package_app_name() -> Option<String> {
+    if !is_file("rv.toml") || !is_file(join("src", "main.rv")) {
+        return None
+    }
+    return match read("rv.toml") {
+        Ok(toml) -> package_name_from(toml),
+        Err(_) -> None,
+    }
+}
+
+fun _exe_suffix() -> String {
+    if os_name() == "windows" {
+        return ".exe"
+    }
+    return ""
+}
+
+// Move the running server's own executable aside so the next rvpm build can
+// link a fresh one at the standard path. Renaming a running binary is allowed
+// on Windows and Linux; overwriting one is not (LNK1104, ETXTBSY). Only fires
+// when the process actually is the rvpm output; a copied binary needs no
+// move. Best effort: on failure the first rebuild reports the link error in
+// the overlay, which is recoverable by restarting.
+fun _move_self_aside(name: String) {
+    let built = join(join("target", "raven-out"), name.concat(_exe_suffix()))
+    if !is_file(built) {
+        return
+    }
+    let argv = args()
+    if argv.len() == 0 {
+        return
+    }
+    let self_path = _slashes(argv.get(0)).to_lower()
+    if !self_path.ends_with(_slashes(built).to_lower()) {
+        return
+    }
+    let aside = join(join("target", "raven-out"), ".rw-serving".concat(_exe_suffix()))
+    if os_name() == "windows" {
+        let command = "Move-Item -LiteralPath '".concat(built).concat("' -Destination '").concat(aside).concat(
+            "' -Force",
+        )
+        match run("powershell", ["-NoProfile", "-Command", command]) {
+            Ok(_) -> {},
+            Err(_) -> {},
+        }
+    } else {
+        match run("mv", ["-f", built, aside]) {
+            Ok(_) -> {},
+            Err(_) -> {},
+        }
+    }
+}
+
 // Recompile a package project through rvpm, which resolves dependencies the
 // single-file compiler does not. Returns the generator's stdout.
 fun _recompile_package(name: String) -> Result<String, String> {
@@ -502,21 +565,11 @@ fun _recompile_package(name: String) -> Result<String, String> {
 // recompiled through rvpm instead, because only package mode resolves rvpm
 // dependencies.
 fun _recompile(entry: String) -> Result<String, String> {
-    // Package mode needs an application package: an rv.toml alone may belong
-    // to a library (raven-web's own repo is one), and rvpm only builds an
-    // executable when src/main.rv exists.
-    if is_file("rv.toml") && is_file(join("src", "main.rv")) {
-        match read("rv.toml") {
-            Ok(toml) -> {
-                match package_name_from(toml) {
-                    Some(name) -> {
-                        return _recompile_package(name)
-                    },
-                    None -> {},
-                }
-            },
-            Err(_) -> {},
-        }
+    match _package_app_name() {
+        Some(name) -> {
+            return _recompile_package(name)
+        },
+        None -> {},
     }
     let _dir = create_dir_all("target")
     let scratch = join("target", ".rw-dev.exe")
