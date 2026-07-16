@@ -479,6 +479,23 @@ fun _executable_attr(name: String) -> Bool {
     return name.starts_with("on") || name == "style" || name == "srcdoc" || name == "http-equiv"
 }
 
+// A DOM key name: letters and digits only ("Escape", "Enter", "ArrowDown",
+// "a", "Space"). Long enough for every named key, short enough to be a name.
+fun _valid_key_name(value: String) -> Bool {
+    if value.length() == 0 || value.length() > 20 {
+        return false
+    }
+    let i = 0
+    while i < value.length() {
+        let b = value.byte_at(i)
+        if !_ascii_letter(b) && !(b >= 48 && b <= 57) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
 fun _valid_attr_name(name: String) -> Bool {
     if name.length() == 0 || !_ascii_letter(name.byte_at(0)) {
         return false
@@ -751,6 +768,12 @@ impl Node {
         return _node("details")
     }
 
+    // A native dialog. Open it with Behavior.open_dialog: the browser
+    // supplies the focus trap, Escape handling, and the backdrop.
+    fun dialog() -> Node {
+        return _node("dialog")
+    }
+
     fun summary() -> Node {
         return _node("summary")
     }
@@ -967,6 +990,22 @@ impl Node {
     }
 
     fun on_key_down(self, behavior: Behavior) -> Node {
+        return self.on(Event.KeyDown, behavior)
+    }
+
+    // A keydown that only fires for one key: on_key("Escape", close). Key
+    // names are the DOM's (Escape, Enter, ArrowDown, a); "Space" is accepted
+    // for the space bar.
+    fun on_key(self, key: String, behavior: Behavior) -> Node {
+        if !_valid_key_name(key) {
+            self.warnings.push(
+                "dropped on_key on ".concat(_describe_node(self)).concat(": invalid key name ").concat(
+                    _quote_word(key),
+                ),
+            )
+            return self
+        }
+        behavior.key = key
         return self.on(Event.KeyDown, behavior)
     }
 
@@ -1705,6 +1744,8 @@ enum Effect {
     IncrementState(String, Int),
     Fetch(FetchSpec),
     ClearState(String),
+    OpenDialog(String),
+    CloseDialog(String),
 }
 
 // A composable, typed sequence of DOM effects. Attached to an element event via
@@ -1713,6 +1754,12 @@ enum Effect {
 struct Behavior {
     effects: List<Effect>,
     prevent: Bool,
+    // Debounce window in milliseconds; 0 runs immediately. For events that
+    // fire in bursts (typing in a search field).
+    wait: Int,
+    // A key name filter for keyboard events; empty matches any key. Set via
+    // Node.on_key.
+    key: String,
     // One line per effect this behavior dropped. Node.on merges them into the
     // element, so Page.warnings() sees them.
     warnings: List<String>,
@@ -1830,7 +1877,7 @@ impl FetchSpec {
 fun behavior() -> Behavior {
     let effects: List<Effect> = []
     let warnings: List<String> = []
-    return Behavior { effects, prevent: false, warnings }
+    return Behavior { effects, prevent: false, wait: 0, key: "", warnings }
 }
 
 impl Behavior {
@@ -1841,6 +1888,38 @@ impl Behavior {
     // Suppress the browser default for the event (form submit, link follow).
     fun prevent_default(self) -> Behavior {
         self.prevent = true
+        return self
+    }
+
+    // Run only after the event has been quiet for `ms` milliseconds, so a
+    // search field fires once per pause instead of once per keystroke.
+    fun debounce(self, ms: Int) -> Behavior {
+        if ms > 0 {
+            self.wait = ms
+        } else {
+            _warn_effect(self.warnings, "debounce", "milliseconds must be positive", ms.to_string())
+        }
+        return self
+    }
+
+    // Open a dialog element as a modal: the browser supplies the focus trap,
+    // Escape-to-close, and the backdrop. Falls back to the open attribute
+    // where showModal is missing.
+    fun open_dialog(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.OpenDialog(selector))
+        } else {
+            _warn_effect(self.warnings, "open_dialog", "invalid selector", selector)
+        }
+        return self
+    }
+
+    fun close_dialog(self, selector: String) -> Behavior {
+        if _css_safe_text(selector) {
+            self.effects.push(Effect.CloseDialog(selector))
+        } else {
+            _warn_effect(self.warnings, "close_dialog", "invalid selector", selector)
+        }
         return self
     }
 
@@ -2160,6 +2239,8 @@ fun _serialize_effect(effect: Effect) -> String {
         IncrementState(key, by) -> _op3("is", key, by.to_string()),
         ClearState(key) -> _op2("cs", key),
         Fetch(spec) -> _serialize_fetch(spec),
+        OpenDialog(selector) -> _op2("dop", selector),
+        CloseDialog(selector) -> _op2("dcl", selector),
     }
 }
 
@@ -2169,6 +2250,12 @@ fun _serialize_behavior(behavior: Behavior) -> String {
         out = out.concat("1")
     } else {
         out = out.concat("0")
+    }
+    if behavior.wait > 0 {
+        out = out.concat(",").concat(_js_string("w")).concat(":").concat(behavior.wait.to_string())
+    }
+    if behavior.key != "" {
+        out = out.concat(",").concat(_js_string("k")).concat(":").concat(_js_string(behavior.key))
     }
     out = out.concat(",").concat(_js_string("e")).concat(":[")
     let first = true
@@ -2322,6 +2409,12 @@ fun _render_runtime() -> String {
     )
     out = out.concat("else if(k==='fetch'){rw_fetch(op[1]);}")
     out = out.concat("else if(k==='go'){rw_go(op[1]);}")
+    out = out.concat(
+        "else if(k==='dop'){var dl=rw_find(op[1]);if(dl){if(dl.showModal){dl.showModal();}else{dl.setAttribute('open','open');}}}",
+    )
+    out = out.concat(
+        "else if(k==='dcl'){var dc=rw_find(op[1]);if(dc){if(dc.close){dc.close();}else{dc.removeAttribute('open');}}}",
+    )
     out = out.concat("}}")
     // Routing. A pattern segment starting with ':' captures one path segment;
     // everything else must match literally, and the lengths must agree.
@@ -2377,9 +2470,18 @@ fun _render_runtime() -> String {
     out = out.concat(
         "function rw_go(path){var to=rw_path(path);if(to!==rw_path(location.pathname)){history.pushState({},'',rw_base+to);}rw_route();}",
     )
+    // The key filter runs before preventDefault so unmatched keys keep their
+    // browser behaviour; the debounce timer lives on the element, so each
+    // element debounces independently.
     out = out.concat(
-        "function rw_dispatch(ev,name){var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-'+name+']');if(!el){return;}var raw=el.getAttribute('data-rw-'+name);if(!raw){return;}var spec;try{spec=JSON.parse(raw);}catch(e){return;}if(spec.p){ev.preventDefault();}rw_run(spec.e||[]);}",
+        "function rw_dispatch(ev,name){var t=ev.target;if(!t||!t.closest){return;}var el=t.closest('[data-rw-'+name+']');if(!el){return;}var raw=el.getAttribute('data-rw-'+name);if(!raw){return;}var spec;try{spec=JSON.parse(raw);}catch(e){return;}",
     )
+    out = out.concat("if(spec.k){var kk=spec.k==='Space'?' ':spec.k;if(ev.key!==kk){return;}}")
+    out = out.concat("if(spec.p){ev.preventDefault();}")
+    out = out.concat(
+        "if(spec.w){if(el.__rwt){clearTimeout(el.__rwt);}el.__rwt=setTimeout(function(){rw_run(spec.e||[]);},spec.w);return;}",
+    )
+    out = out.concat("rw_run(spec.e||[]);}")
     out = out.concat(
         "var rw_events=['click','input','change','submit','keydown','keyup','focusin','focusout','mouseover','mouseout','scroll'];",
     )
@@ -2416,7 +2518,20 @@ fun _render_runtime() -> String {
         "for(var q=0;q<rwl.length;q++){var lv=rwl[q].getAttribute('data-rw-link');if(lv){rwl[q].setAttribute('href',rw_base+lv);}}}",
     )
     out = out.concat("rw_load();rw_route();rw_apply();rw_run(rw_onload);rw_booted=true;")
+    // Page timers start after boot, so their first tick never races the
+    // initial bindings.
+    out = out.concat("var rw_timers=rw_init.t||[];")
+    out = out.concat(
+        "for(var ti=0;ti<rw_timers.length;ti++){(function(sp){setInterval(function(){rw_run(sp[1]||[]);},sp[0]);})(rw_timers[ti]);}",
+    )
     return out.concat("})();")
+}
+
+// A page interval: run these effects every `ms` milliseconds, for carousels,
+// clocks, and polling refreshes.
+struct TimerSpec {
+    ms: Int,
+    effects: List<Effect>,
 }
 
 struct StatePair {
@@ -2572,6 +2687,7 @@ fun _serialize_config(
     bindings: List<Binding>,
     persisted: List<String>,
     load_effects: List<Effect>,
+    timers: List<TimerSpec>,
     base: String,
 ) -> String {
     let out = "{".concat(_js_string("s")).concat(":{")
@@ -2623,7 +2739,18 @@ fun _serialize_config(
     )
     out = out.concat(",").concat(_js_string("d")).concat(":").concat(_serialize_deps(bindings))
     out = out.concat(",").concat(_js_string("z")).concat(":").concat(_js_string(base))
-    return out.concat("}")
+    out = out.concat(",").concat(_js_string("t")).concat(":[")
+    let tfirst = true
+    for timer in timers {
+        if !tfirst {
+            out = out.concat(",")
+        }
+        out = out.concat("[").concat(timer.ms.to_string()).concat(",").concat(
+            _serialize_effects(timer.effects),
+        ).concat("]")
+        tfirst = false
+    }
+    return out.concat("]}")
 }
 
 struct Page {
@@ -2639,6 +2766,7 @@ struct Page {
     bindings: List<Binding>,
     persisted: List<String>,
     load_effects: List<Effect>,
+    timers: List<TimerSpec>,
     single_page: Bool,
     // Typed head metadata: name/content metas, property/content metas (Open
     // Graph, Twitter), preconnect origins, serialized JSON-LD blocks, and the
@@ -2861,6 +2989,7 @@ impl Page {
         let preconnects: List<Attribute> = []
         let structured: List<String> = []
         let alternates: List<Attribute> = []
+        let timers: List<TimerSpec> = []
         return Page {
             title,
             root,
@@ -2874,6 +3003,7 @@ impl Page {
             bindings: _empty_bindings(),
             persisted: _empty_persisted(),
             load_effects: _empty_effects(),
+            timers,
             single_page: false,
             metas,
             meta_props,
@@ -3140,6 +3270,23 @@ impl Page {
         return self
     }
 
+    // Run `behavior` every `ms` milliseconds, starting after boot: a
+    // carousel advance, a clock, or a polling fetch that keeps a list fresh.
+    // Sub-100ms intervals are refused; that cadence belongs to CSS.
+    fun every(self, ms: Int, behavior: Behavior) -> Page {
+        for warning in behavior.warnings {
+            self.page_warnings.push(warning)
+        }
+        if ms < 100 {
+            self.page_warnings.push(
+                "dropped every: intervals under 100 ms are refused (got ".concat(ms.to_string()).concat(")"),
+            )
+            return self
+        }
+        self.timers.push(TimerSpec { ms, effects: behavior.effects })
+        return self
+    }
+
     // Run `behavior` once after the page loads and persisted state is restored,
     // so a view can fetch its data without the user clicking anything.
     fun on_load(self, behavior: Behavior) -> Page {
@@ -3373,6 +3520,7 @@ impl Page {
                 self.all_bindings(),
                 self.persisted,
                 self.load_effects,
+                self.timers,
                 self.base,
             ),
         ).concat(";").concat(_render_runtime())

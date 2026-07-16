@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.15.0"
+"github.com/martian56/raven-web" = "v0.16.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -152,7 +152,21 @@ let form = Node.form().on_submit(
 Events: click, input, change, submit, keydown, keyup, focus, blur, mouseenter,
 mouseleave, scroll. Effects: set text/value/attribute, add/remove/toggle class,
 focus, show/hide/toggle-visible, navigate (safe URLs only), scroll-to,
-copy-value, copy-to-clipboard, and the client-state effects below.
+copy-value, copy-to-clipboard, open/close a dialog, and the client-state
+effects below.
+
+Polish for real interfaces:
+
+- `Node.on_key("Escape", behavior)` fires only for the named key, so an
+  unmatched key keeps its browser behaviour.
+- `Behavior.debounce(300)` runs after the event has been quiet for the
+  window, so a search field fires once per pause, not once per keystroke.
+- `Node.dialog()` with `Behavior.open_dialog("#id")` / `close_dialog` uses
+  the native modal: the browser supplies the focus trap, Escape-to-close,
+  and the backdrop, with a graceful fallback where `showModal` is missing.
+- `Page.every(5000, behavior)` runs a behavior on an interval, starting
+  after boot: a carousel advance, a clock, or a polling `fetch` that keeps a
+  list fresh. Intervals under 100 ms are refused.
 
 ## Client state and bindings
 

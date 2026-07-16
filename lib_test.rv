@@ -1150,3 +1150,53 @@ fun test_atom_feed_escapes_and_dates() {
     assert_true(xml.contains("rel=\"self\""))
     assert_false(xml.contains("<two>"))
 }
+
+fun test_key_filtered_events_serialize() {
+    let close = Behavior.new().close_dialog("#help")
+    let html = Node.div().on_key("Escape", close).render()
+    assert_true(html.contains("data-rw-keydown="))
+    assert_true(html.contains("&quot;k&quot;:&quot;Escape&quot;"))
+    assert_true(html.contains("dcl"))
+    // A bad key name is dropped loudly and binds nothing.
+    let bad = Node.div().on_key("Esc ape!", Behavior.new().hide("#x"))
+    assert_false(bad.render().contains("data-rw-keydown"))
+    assert_true(_has_warning(bad.warnings, "on_key"))
+}
+
+fun test_debounce_serializes_and_validates() {
+    let search = Behavior.new().debounce(300).set_state("q", "x")
+    let html = Node.input_field("Search").on_input(search).render()
+    assert_true(html.contains("&quot;w&quot;:300"))
+    let bad = Behavior.new().debounce(0)
+    assert_true(_has_warning(bad.warnings, "debounce"))
+    // The runtime carries the per-element timer machinery.
+    let js = Page.new("D", Node.div()).js()
+    assert_true(js.contains("clearTimeout"))
+    assert_true(js.contains("setTimeout"))
+}
+
+fun test_page_timers_serialize_and_validate() {
+    let poll = Behavior.new().fetch(request("GET", "/rows.json").store("rows"))
+    let page = Page.new("T", Node.div()).every(5000, poll)
+    let js = page.js()
+    assert_true(js.contains("\"t\":[[5000,"))
+    assert_true(js.contains("setInterval"))
+    let fast = Page.new("T", Node.div()).every(16, Behavior.new().toggle_state("x"))
+    assert_true(_has_warning(fast.warnings(), "every"))
+    assert_false(fast.js().contains("[[16,"))
+}
+
+fun test_dialog_effects_and_element() {
+    let open = Behavior.new().open_dialog("#confirm")
+    let html = Node.div().child(
+        Node.dialog().id("confirm").child(Node.p().child_text("Sure?")).child(
+            Node.button("Close").on_click(Behavior.new().close_dialog("#confirm")),
+        ),
+    ).child(Node.button("Open").on_click(open)).render()
+    assert_true(html.contains("<dialog id=\"confirm\">"))
+    assert_true(html.contains("dop"))
+    assert_true(html.contains("dcl"))
+    // The runtime prefers showModal and falls back to the open attribute.
+    let js = Page.new("Dlg", Node.dialog()).js()
+    assert_true(js.contains("showModal"))
+}
