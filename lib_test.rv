@@ -854,3 +854,45 @@ fun test_strict_pages_refuse_to_write_with_warnings() {
         Err(_) -> assert_true(false),
     }
 }
+
+fun test_head_metadata_renders_and_escapes() {
+    let fields: Map<String, JsonValue> = Map.new()
+    fields.set("name", JsonValue.Str("Fuad"))
+    fields.set("evil", JsonValue.Str("</script><script>alert(1)</script>"))
+    let ld = JsonValue.Object(fields)
+    let page = Page.new("Head", Node.div()).meta("robots", "index, follow").meta_property(
+        "og:title",
+        "A <quoted> title",
+    ).canonical("https://example.com/").theme_color("#000000").preconnect(
+        "https://fonts.gstatic.com",
+        true,
+    ).preconnect("https://cdn.example.com", false).structured_data(ld)
+    let html = page.html()
+    assert_true(html.contains("name=\"robots\""))
+    assert_true(html.contains("property=\"og:title\""))
+    assert_true(html.contains("content=\"A &lt;quoted&gt; title\""))
+    assert_true(html.contains("rel=\"canonical\" href=\"https://example.com/\""))
+    assert_true(html.contains("name=\"theme-color\" content=\"#000000\""))
+    assert_true(html.contains("rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin"))
+    assert_true(html.contains("rel=\"preconnect\" href=\"https://cdn.example.com\">"))
+    assert_true(html.contains("application/ld+json"))
+    // The JSON-LD payload cannot close its script element: angle brackets are
+    // escaped inside the JSON, so the attack string never appears as markup.
+    assert_false(html.contains("<script>alert"))
+    assert_true(html.contains("u003c/script"))
+    assert_true(page.warnings().len() == 0)
+}
+
+fun test_head_metadata_rejects_bad_input_loudly() {
+    let page = Page.new("Head", Node.div()).meta("onload", "x").canonical("javascript:alert(1)").meta_property(
+        "bad prop",
+        "x",
+    )
+    let html = page.html()
+    assert_false(html.contains("onload"))
+    assert_false(html.contains("javascript:alert"))
+    let warnings = page.warnings()
+    assert_true(_has_warning(warnings, "dropped meta"))
+    assert_true(_has_warning(warnings, "dropped canonical"))
+    assert_true(_has_warning(warnings, "dropped meta_property"))
+}

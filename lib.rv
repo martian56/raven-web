@@ -2553,6 +2553,15 @@ struct Page {
     persisted: List<String>,
     load_effects: List<Effect>,
     single_page: Bool,
+    // Typed head metadata: name/content metas, property/content metas (Open
+    // Graph, Twitter), preconnect origins, serialized JSON-LD blocks, and the
+    // singular canonical URL and theme color.
+    metas: List<Attribute>,
+    meta_props: List<Attribute>,
+    preconnects: List<Attribute>,
+    structured: List<String>,
+    canonical_url: String,
+    theme_color_value: String,
     // Page-level dropped inputs; warnings() adds the tree's and the styles'.
     page_warnings: List<String>,
     // With strict set, write_static refuses to write while any warning exists.
@@ -2617,6 +2626,20 @@ fun _empty_effects() -> List<Effect> {
     return effects
 }
 
+// A backslash character without a backslash literal: serialize a string that
+// contains a quote and read the escape the JSON writer produced.
+fun _backslash() -> String {
+    return stringify(JsonValue.Str(_quote())).substring(1, 2)
+}
+
+// JSON destined for a script element must not be able to close it. Replacing
+// every angle bracket with its JSON unicode escape keeps the payload valid
+// JSON and inert as markup, whatever strings the data carries.
+fun _escape_json_for_script(json: String) -> String {
+    let bs = _backslash()
+    return json.replace("<", bs.concat("u003c")).replace(">", bs.concat("u003e"))
+}
+
 fun _warn_binding(method: String, selector: String, key: String) -> String {
     return "dropped ".concat(method).concat(": invalid selector or key (selector ").concat(
         _quote_word(selector),
@@ -2642,6 +2665,10 @@ impl Page {
     // Components cross the package boundary as their rendered Node value.
     fun new(title: String, root: Node) -> Page {
         let page_warnings: List<String> = []
+        let metas: List<Attribute> = []
+        let meta_props: List<Attribute> = []
+        let preconnects: List<Attribute> = []
+        let structured: List<String> = []
         return Page {
             title,
             root,
@@ -2656,9 +2683,82 @@ impl Page {
             persisted: _empty_persisted(),
             load_effects: _empty_effects(),
             single_page: false,
+            metas,
+            meta_props,
+            preconnects,
+            structured,
+            canonical_url: "",
+            theme_color_value: "",
             page_warnings,
             strict_mode: false,
         }
+    }
+
+    // A named meta tag: meta("robots", "index, follow"). The name is checked
+    // like an attribute name; the content is escaped like any attribute value.
+    fun meta(self, name: String, content: String) -> Page {
+        if _valid_attr_name(name) {
+            self.metas.push(Attribute { name, value: content })
+        } else {
+            self.page_warnings.push("dropped meta: invalid name ".concat(_quote_word(name)))
+        }
+        return self
+    }
+
+    // A property meta tag, the Open Graph and Twitter shape:
+    // meta_property("og:title", ...).
+    fun meta_property(self, property: String, content: String) -> Page {
+        if _valid_attr_name(property) {
+            self.meta_props.push(Attribute { name: property, value: content })
+        } else {
+            self.page_warnings.push(
+                "dropped meta_property: invalid property ".concat(_quote_word(property)),
+            )
+        }
+        return self
+    }
+
+    // The canonical URL for this page. One per page; the last write wins.
+    fun canonical(self, url: String) -> Page {
+        if _safe_url(url) {
+            self.canonical_url = url
+        } else {
+            self.page_warnings.push("dropped canonical: unsafe URL ".concat(_quote_word(url)))
+        }
+        return self
+    }
+
+    fun theme_color(self, value: String) -> Page {
+        if _css_safe_text(value) {
+            self.theme_color_value = value
+        } else {
+            self.page_warnings.push("dropped theme_color: invalid value ".concat(_quote_word(value)))
+        }
+        return self
+    }
+
+    // A preconnect hint. Set `cors` for origins fetched with CORS (font
+    // files), which need the crossorigin attribute on the hint to be reused.
+    fun preconnect(self, url: String, cors: Bool) -> Page {
+        if _safe_url(url) {
+            let flag = if cors {
+                "1"
+            } else {
+                ""
+            }
+            self.preconnects.push(Attribute { name: url, value: flag })
+        } else {
+            self.page_warnings.push("dropped preconnect: unsafe URL ".concat(_quote_word(url)))
+        }
+        return self
+    }
+
+    // Structured data (JSON-LD), from a typed JsonValue. The value is
+    // serialized here and every angle bracket is escaped inside the JSON, so
+    // no string in the data can close the script element: it stays data.
+    fun structured_data(self, value: JsonValue) -> Page {
+        self.structured.push(_escape_json_for_script(stringify(value)))
+        return self
     }
 
     // Refuse to write while any warning exists. This is what a CI build wants:
@@ -2954,10 +3054,44 @@ impl Page {
                 _escape_html(self.favicon),
             ).concat(q).concat(">")
         }
+        for hint in self.preconnects {
+            out = out.concat("<link rel=").concat(q).concat("preconnect").concat(q).concat(" href=").concat(
+                q,
+            ).concat(_escape_html(hint.name)).concat(q)
+            if hint.value != "" {
+                out = out.concat(" crossorigin")
+            }
+            out = out.concat(">")
+        }
         for url in self.css_links {
             out = out.concat("<link rel=").concat(q).concat("stylesheet").concat(q).concat(" href=").concat(
                 q,
             ).concat(_escape_html(url)).concat(q).concat(">")
+        }
+        for item in self.metas {
+            out = out.concat("<meta name=").concat(q).concat(_escape_html(item.name)).concat(q).concat(
+                " content=",
+            ).concat(q).concat(_escape_html(item.value)).concat(q).concat(">")
+        }
+        for item in self.meta_props {
+            out = out.concat("<meta property=").concat(q).concat(_escape_html(item.name)).concat(q).concat(
+                " content=",
+            ).concat(q).concat(_escape_html(item.value)).concat(q).concat(">")
+        }
+        if self.canonical_url != "" {
+            out = out.concat("<link rel=").concat(q).concat("canonical").concat(q).concat(" href=").concat(
+                q,
+            ).concat(_escape_html(self.canonical_url)).concat(q).concat(">")
+        }
+        if self.theme_color_value != "" {
+            out = out.concat("<meta name=").concat(q).concat("theme-color").concat(q).concat(" content=").concat(
+                q,
+            ).concat(_escape_html(self.theme_color_value)).concat(q).concat(">")
+        }
+        for blob in self.structured {
+            out = out.concat("<script type=").concat(q).concat("application/ld+json").concat(q).concat(">").concat(
+                blob,
+            ).concat("</script>")
         }
         return out.concat("</head><body>").concat(self.root.render()).concat("<script src=").concat(
             q,

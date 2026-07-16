@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.12.2"
+"github.com/martian56/raven-web" = "v0.13.0"
 ```
 
 Raven Web is tested with Raven 2.26.1 on Linux and Windows.
@@ -81,6 +81,10 @@ The long-form walkthrough is [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 - `Behavior` is a typed, composable sequence of DOM effects attached directly to
   an element event. No handwritten JavaScript, no stringly-typed action names.
 - `Page` owns metadata, styles, client state, bindings, and output files.
+  Head metadata is typed too: `meta`, `meta_property` (Open Graph, Twitter),
+  `canonical`, `theme_color`, `preconnect`, and JSON-LD through
+  `structured_data(JsonValue)`, which escapes every angle bracket inside the
+  JSON so the payload can never close its script element.
 - `Router` routes on the client: patterns, params, guards, and history, with no
   reload. `Site` and `Layout` build multi-page sites with a shared shell,
   clean-URL routing, a sitemap, and a 404 page.
