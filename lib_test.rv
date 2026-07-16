@@ -1,6 +1,6 @@
 import std/fs { create_dir_all, exists, read, write }
 import std/test { assert_false, assert_true }
-import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, highlight, load_documents, markdown, parse_document, query_param, request, signal, sort_documents_desc, syntax_styles, transition_styles }
+import "./lib" { Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, highlight, i18n, load_documents, markdown, parse_document, query_param, request, signal, sort_documents_desc, syntax_styles, transition_styles }
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -1254,4 +1254,41 @@ fun test_syntax_styles_exposes_the_tokens() {
     assert_true(css.contains(".tok-str"))
     assert_true(css.contains(".tok-com"))
     assert_true(css.contains(".tok-num"))
+}
+
+fun test_i18n_routes_and_urls() {
+    let site = i18n("https://example.com/").default_locale("az").locale("en", "en")
+    let locales = site.all()
+    assert_true(locales.len() == 2)
+    let az = locales.get(0)
+    let en = locales.get(1)
+    // Routes for Site.page.
+    assert_true(site.route(az, "") == "/")
+    assert_true(site.route(az, "about") == "/about")
+    assert_true(site.route(en, "") == "/en")
+    assert_true(site.route(en, "about") == "/en/about")
+    // Slashes in the subpath are tolerated.
+    assert_true(site.route(en, "/blog/") == "/en/blog")
+    // Clean canonical URLs with a trailing slash, matching Site output.
+    assert_true(site.url(az, "") == "https://example.com/")
+    assert_true(site.url(en, "") == "https://example.com/en/")
+    assert_true(site.url(en, "about") == "https://example.com/en/about/")
+}
+
+fun test_i18n_localize_wires_lang_canonical_and_alternates() {
+    let site = i18n("https://example.com").default_locale("az").locale("en", "en")
+    let az = site.all().get(0)
+    let page = site.localize(Page.new("Home", Node.div()), az, "")
+    let html = page.html()
+    assert_true(html.contains("<html lang=\"az\""))
+    assert_true(html.contains("rel=\"canonical\" href=\"https://example.com/\""))
+    assert_true(html.contains("hreflang=\"az\" href=\"https://example.com/\""))
+    assert_true(html.contains("hreflang=\"en\" href=\"https://example.com/en/\""))
+    assert_true(html.contains("hreflang=\"x-default\" href=\"https://example.com/\""))
+    assert_true(page.warnings().len() == 0)
+    // The English page canonicalises to itself, alternates unchanged.
+    let en = site.all().get(1)
+    let en_page = site.localize(Page.new("Home", Node.div()), en, "")
+    assert_true(en_page.html().contains("rel=\"canonical\" href=\"https://example.com/en/\""))
+    assert_true(en_page.html().contains("<html lang=\"en\""))
 }

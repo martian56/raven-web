@@ -482,6 +482,27 @@ HTML is escaped, executable-looking attributes and unsafe URLs are rejected, and
 all interaction code is structured data interpreted by a fixed runtime rather
 than string-injected script.
 
+## Multi-language sites
+
+Declare a locale set once, then localize each page. `localize` sets the
+`lang`, the canonical URL, and the full hreflang alternate set (every locale
+plus `x-default`) in one call, so a multilingual site stops hand-wiring SEO
+per page. Each locale is served as its own path prefix, which is what
+`Site.page` expects.
+
+```rust
+let langs = i18n("https://example.com").default_locale("az").locale("en", "en")
+
+let site = Site.new("https://example.com")
+for locale in langs.all() {
+    let page = langs.localize(Page.new(title, view(locale)), locale, "")
+    site.page(langs.route(locale, ""), page)   // "/" for az, "/en" for en
+}
+```
+
+`langs.url(locale, "about")` gives the clean canonical URL for a sub-path,
+matching what `Site` emits.
+
 ## Content: markdown, frontmatter, collections, feeds
 
 A content site is first-class. Markdown renders through the same safe
