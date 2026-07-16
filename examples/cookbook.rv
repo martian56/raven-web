@@ -1,0 +1,148 @@
+// The component cookbook, as one buildable page. Every recipe in
+// docs/COOKBOOK.md is here and proven to compile and run. Build with:
+//
+//   raven build examples/cookbook.rv -o target/cookbook.exe
+//   ./target/cookbook.exe        # writes dist-cookbook/
+
+import std/io { println }
+import "../lib" { Behavior, Expr, Node, Page, Signal, Stylesheet, signal, transition_styles }
+
+// ----- accordion: a signal per panel, toggled, with an animated body -----
+fun accordion_item(open: Signal, heading: String, body: String) -> Node {
+    return Node.section().class_name("acc-item").child(
+        Node.button(heading).class_name("acc-head").on_click(Behavior.new().toggle(open)).aria_if(
+            open,
+            "expanded",
+        ),
+    ).child(Node.div().class_name("acc-body").visible_if(open).transition().child_text(body))
+}
+
+fun accordion() -> Node {
+    let a = signal("acc_a", "")
+    let b = signal("acc_b", "")
+    return Node.div().class_name("card").child(Node.h2().child_text("Accordion")).child(
+        accordion_item(a, "What is raven-web?", "A static-first frontend library for Raven."),
+    ).child(accordion_item(b, "Do I write JavaScript?", "No. A fixed runtime interprets typed data."))
+}
+
+// ----- tabs: one signal holds the active index -----
+fun tab_button(active: Signal, index: String, label: String) -> Node {
+    return Node.button(label).class_name("tab").on_click(Behavior.new().set(active, index)).class_when(
+        Expr.eq(Expr.of(active), Expr.text(index)),
+        "active",
+    )
+}
+
+fun tab_panel(active: Signal, index: String, body: String) -> Node {
+    return Node.div().class_name("tab-panel").child_text(body).visible_when(
+        Expr.eq(Expr.of(active), Expr.text(index)),
+    )
+}
+
+fun tabs() -> Node {
+    let active = signal("tab", "0")
+    return Node.div().class_name("card").child(Node.h2().child_text("Tabs")).child(
+        Node.div().class_name("tab-row").child(tab_button(active, "0", "First")).child(
+            tab_button(active, "1", "Second"),
+        ).child(tab_button(active, "2", "Third")),
+    ).child(tab_panel(active, "0", "The first panel.")).child(
+        tab_panel(active, "1", "The second panel."),
+    ).child(tab_panel(active, "2", "The third panel."))
+}
+
+// ----- modal: the native dialog, opened and closed by behaviors -----
+fun modal() -> Node {
+    return Node.div().class_name("card").child(Node.h2().child_text("Modal")).child(
+        Node.button("Open dialog").class_name("btn").on_click(
+            Behavior.new().open_dialog("#demo-modal"),
+        ),
+    ).child(
+        Node.dialog().id("demo-modal").class_name("modal").child(
+            Node.h3().child_text("A native dialog"),
+        ).child(
+            Node.p().child_text(
+                "The browser supplies the focus trap, backdrop, and Escape-to-close.",
+            ),
+        ).child(
+            Node.button("Close").class_name("btn").on_click(
+                Behavior.new().close_dialog("#demo-modal"),
+            ),
+        ),
+    )
+}
+
+// ----- responsive nav: a menu signal toggles the links on small screens -----
+fun nav_bar() -> Node {
+    let menu = signal("menu", "")
+    return Node.div().class_name("card").child(Node.h2().child_text("Responsive nav")).child(
+        Node.nav().class_name("navbar").child(
+            Node.span().class_name("nav-brand").child_text("Acme"),
+        ).child(
+            Node.button("Menu").class_name("nav-toggle").on_click(Behavior.new().toggle(menu)).aria_if(
+                menu,
+                "expanded",
+            ),
+        ).child(
+            Node.ul().class_name("nav-links").class_when(Expr.of(menu), "open").child(
+                Node.li().child(Node.link("Home", "#")),
+            ).child(Node.li().child(Node.link("Docs", "#"))).child(
+                Node.li().child(Node.link("Contact", "#")),
+            ),
+        ),
+    )
+}
+
+// ----- card grid: static structure from a list -----
+fun cards() -> Node {
+    let grid = Node.div().class_name("grid")
+    let items = ["Fast", "Safe", "Small", "Typed"]
+    for item in items {
+        let _ = grid.child(
+            Node.article().class_name("mini-card").child(Node.h3().child_text(item)).child(
+                Node.p().child_text("A short line about ".concat(item.to_lower()).concat(".")),
+            ),
+        )
+    }
+    return Node.div().class_name("card").child(Node.h2().child_text("Card grid")).child(grid)
+}
+
+fun styles() -> Stylesheet {
+    return transition_styles().raw(
+        "*{margin:0;box-sizing:border-box}body{background:#0f1115;color:#e6e8ec;font-family:system-ui,sans-serif;line-height:1.6}main{max-width:44rem;margin:0 auto;padding:3rem 1.5rem;display:grid;gap:2rem}",
+    ).raw(
+        ".card{border:1px solid #262a33;border-radius:14px;padding:1.5rem}.card h2{margin-bottom:1rem;font-size:1.3rem}.btn{font:inherit;background:#e6e8ec;color:#0f1115;border:0;border-radius:8px;padding:0.5rem 1rem;cursor:pointer}",
+    ).raw(
+        ".acc-item{border-top:1px solid #262a33}.acc-head{width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;padding:0.9rem 0;cursor:pointer}.acc-body{padding-bottom:0.9rem;color:#9aa0ac}",
+    ).raw(
+        ".tab-row{display:flex;gap:0.5rem;margin-bottom:1rem}.tab{font:inherit;background:none;border:1px solid #262a33;color:#9aa0ac;border-radius:8px;padding:0.4rem 0.9rem;cursor:pointer}.tab.active{background:#e6e8ec;color:#0f1115;border-color:#e6e8ec}.tab-panel{color:#9aa0ac}",
+    ).raw(
+        ".modal{border:1px solid #262a33;border-radius:14px;background:#181b21;color:#e6e8ec;padding:1.5rem;max-width:24rem}.modal::backdrop{background:rgba(0,0,0,0.6)}.modal h3{margin-bottom:0.6rem}.modal p{color:#9aa0ac;margin-bottom:1rem}",
+    ).raw(
+        ".navbar{display:flex;align-items:center;gap:1rem}.nav-brand{font-weight:700}.nav-toggle{margin-left:auto;font:inherit;background:none;border:1px solid #262a33;color:inherit;border-radius:8px;padding:0.3rem 0.8rem;cursor:pointer}.nav-links{list-style:none;display:flex;gap:1rem}.nav-links a{color:#9aa0ac;text-decoration:none}",
+    ).raw(
+        ".grid{display:grid;gap:1rem;grid-template-columns:repeat(2,1fr)}.mini-card{border:1px solid #262a33;border-radius:12px;padding:1rem}.mini-card p{color:#9aa0ac;font-size:0.9rem}",
+    ).raw(
+        "@media(min-width:640px){.nav-toggle{display:none}}@media(max-width:639px){.nav-links{display:none;position:absolute}.nav-links.open{display:flex;flex-direction:column}}",
+    )
+}
+
+fun build() {
+    let menu = signal("menu", "")
+    let tab = signal("tab", "0")
+    let acc_a = signal("acc_a", "")
+    let acc_b = signal("acc_b", "")
+    let body = Node.main_node().child(accordion()).child(tabs()).child(modal()).child(nav_bar()).child(
+        cards(),
+    )
+    let page = Page.new("Component cookbook", body).description("raven-web component recipes.").with_styles(
+        styles(),
+    ).signal(menu).signal(tab).signal(acc_a).signal(acc_b).strict()
+    match page.write_static("dist-cookbook") {
+        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
+        Err(error) -> println(error.to_string()),
+    }
+}
+
+fun main() {
+    build()
+}
