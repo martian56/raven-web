@@ -896,3 +896,17 @@ fun test_head_metadata_rejects_bad_input_loudly() {
     assert_true(_has_warning(warnings, "dropped canonical"))
     assert_true(_has_warning(warnings, "dropped meta_property"))
 }
+
+fun test_meta_names_allow_underscores() {
+    let page = Page.new("U", Node.div()).meta_property("og:site_name", "Fuad Alizada").meta_property(
+        "article:published_time",
+        "2026-07-16",
+    )
+    let html = page.html()
+    assert_true(html.contains("property=\"og:site_name\""))
+    assert_true(html.contains("property=\"article:published_time\""))
+    assert_true(page.warnings().len() == 0)
+    // The executable names stay refused by name, not by character.
+    let bad = Node.div().attr("on_click", "x").render()
+    assert_false(bad.contains("on_click"))
+}

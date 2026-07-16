@@ -432,8 +432,12 @@ fun _ascii_letter(b: Int) -> Bool {
     return (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
 }
 
+// Letters, digits, hyphen, underscore: the character set of tag, attribute,
+// and meta names. Underscore is legal in attribute and meta-property names
+// (og:site_name, article:published_time) and carries no execution risk; the
+// executable checks are by name, not by character.
 fun _name_char(b: Int) -> Bool {
-    return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 45
+    return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 45 || b == 95
 }
 
 // Elements that run code or hand the page to someone else. raven-web owns the
