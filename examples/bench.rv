@@ -1,21 +1,21 @@
 // Generates a deliberately heavy page: many independent bindings plus a long
 // list, so the cost of one state write can be measured against a realistic
 // worst case rather than a toy.
-import std/io { println }
-import std/json { ToJson }
-import "../lib" { Behavior, Expr, Node, Page, app, signal, signal_of }
+from std.io import println
+from std.json import ToJson
+from "../lib" import Behavior, Expr, Node, Page, app, signal, signal_of
 
 @derive(ToJson)
-struct Row {
-    id: Int,
-    title: String,
+class Row {
+    id: int
+    title: str
 }
 
-fun rows(n: Int) -> List<Row> {
-    let out: List<Row> = []
-    let i = 0
+fun rows(n: int) -> list[Row] {
+    let out: list[Row] = []
+    var i = 0
     while i < n {
-        out.push(Row { id: i, title: "Row ".concat(i.to_string()) })
+        out.push(Row(id: i, title: "Row ".concat(i.to_string())))
         i += 1
     }
     return out
@@ -31,7 +31,7 @@ fun main() {
 
     // 200 independent counters: 400 bindings that have nothing to do with the
     // one we will write to.
-    let i = 0
+    var i = 0
     while i < 200 {
         let ctx = ui.instance()
         let n = ctx.local("n", "0")
@@ -54,7 +54,7 @@ fun main() {
 
     let page = ui.page("bench", body).signal(data).signal(signal("spare", "0"))
     match page.write_static("dist-bench") {
-        Ok(out) -> println("bench: wrote ${out.file_count()} files"),
-        Err(error) -> println(error.message()),
+        case Ok(out) { println("bench: wrote ${out.file_count()} files") }
+        case Err(error) { println(error.message()) }
     }
 }

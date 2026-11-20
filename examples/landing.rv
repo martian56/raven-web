@@ -3,18 +3,18 @@
 // build lists, and every interaction is a typed Behavior. No JavaScript is
 // written by hand; raven-web emits the whole runtime.
 
-import std/io { println }
-import "../lib" { Behavior, Component, Node, Page, Stylesheet }
+from std.io import println
+from "../lib" import Behavior, Component, Node, Page, Stylesheet
 
-struct Feature {
-    icon: String,
-    title: String,
-    body: String,
+class Feature {
+    icon: str
+    title: str
+    body: str
 }
 
 impl Feature {
-    fun new(icon: String, title: String, body: String) -> Feature {
-        return Feature { icon, title, body }
+    fun new(icon: str, title: str, body: str) -> Feature {
+        return Feature(icon: icon, title: title, body: body)
     }
 }
 
@@ -26,8 +26,8 @@ impl Component for Feature {
     }
 }
 
-fun features() -> List<Feature> {
-    let items: List<Feature> = []
+fun features() -> list[Feature] {
+    let items: list[Feature] = []
     items.push(
         Feature.new(
             "[]",
@@ -124,7 +124,7 @@ fun build() -> Page {
     let body = Node.main_node().child(nav()).child(hero()).child(
         Node.section().id("features").class_name("features").child_each(
             features(),
-            fun(feature: Feature) -> Node = feature.to_node(),
+            (feature: Feature) -> Node => feature.to_node(),
         ),
     ).child(subscribe())
     return Page.new("raven-web", body).lang("en").description(
@@ -134,11 +134,13 @@ fun build() -> Page {
 
 fun main() {
     match build().write_static("dist") {
-        Ok(output) -> println(
-            "wrote ".concat(output.file_count().to_string()).concat(" files to ").concat(
-                output.directory(),
-            ),
-        ),
-        Err(error) -> println(error.to_string()),
+        case Ok(output) {
+            println(
+                "wrote ".concat(output.file_count().to_string()).concat(" files to ").concat(
+                    output.directory(),
+                ),
+            )
+        }
+        case Err(error) { println(error.to_string()) }
     }
 }

@@ -15,10 +15,10 @@ what should not.
 ```raven
 fun test_home_renders_expected_markup() {
     let html = home().html()
-    assert_true(html.contains("<title>Home</title>"))
-    assert_true(html.contains("<h1>Welcome</h1>"))
+    assert_true(html.contains("<title>Home[/title]"))
+    assert_true(html.contains("<h1>Welcome[/h1]"))
     assert_true(html.contains("data-rw-click="))
-    assert_false(html.contains("onclick"))     // nothing executable leaked in
+    assert_false(html.contains("onclick")) // nothing executable leaked in
 }
 ```
 

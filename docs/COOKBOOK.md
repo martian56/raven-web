@@ -19,7 +19,7 @@ correct, and `transition()` animates the body (pair with
 `transition_styles()`).
 
 ```raven
-fun accordion_item(open: Signal, heading: String, body: String) -> Node {
+fun accordion_item(open: Signal, heading: str, body: str) -> Node {
     return Node.section().child(
         Node.button(heading).on_click(Behavior.new().toggle(open)).aria_if(open, "expanded"),
     ).child(Node.div().visible_if(open).transition().child_text(body))

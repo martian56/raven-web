@@ -169,7 +169,7 @@ state, the framework re-renders) is unreachable from here by adding effects.
    covers the *builder* API, not the *wiring*, which is where the bugs live.
    React with TypeScript type-checks props from parent to child; raven-web checks
    nothing across the binding boundary.
-7. **`Page.state(key, value)` takes only a `String`.** Structured initial state
+7. **`Page.state(key, value)` takes only a `str`.** Structured initial state
    is impossible; arrays can only enter via `fetch`. The typed domain in
    `packages/core` cannot cross into the client as typed data.
 

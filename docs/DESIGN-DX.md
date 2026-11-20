@@ -48,12 +48,10 @@ source. Editing your site meant rebuild, restart, refresh, by hand.
 `dev.cli` closes the loop using `std/process`. The author writes one main:
 
 ```rust
-import "github.com/martian56/raven-web/dev" { cli }
+from "github.com/martian56/raven-web/dev" import cli
 
 fun main() {
-    cli("site.rv", "dist").run(fun() -> Unit {
-        build()
-    })
+    cli("site.rv", "dist").run(() => build())
 }
 ```
 

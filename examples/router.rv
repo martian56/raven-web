@@ -6,8 +6,8 @@
 //
 // Note what is absent: no CSS selector, no state string, no JavaScript.
 
-import std/io { println }
-import "../lib" { Behavior, Ctx, Expr, Node, Page, Router, Signal, Stylesheet, app, signal }
+from std.io import println
+from "../lib" import Behavior, Ctx, Expr, Node, Page, Router, Signal, Stylesheet, app, signal
 
 fun nav() -> Node {
     return Node.nav().class_name("nav").child(Node.route_link("Home", "/")).child(
@@ -19,7 +19,7 @@ fun nav() -> Node {
 
 // A component, so routing and components compose: this counter lives on the
 // home screen and keeps its value across navigation.
-fun counter(ctx: Ctx, label: String) -> Node {
+fun counter(ctx: Ctx, label: str) -> Node {
     let n = ctx.local("n", "0")
     return Node.p().class_name("counter").child(Node.span().child_text(label)).child(
         Node.span().class_name("counter-value").text_of(n),
@@ -92,7 +92,7 @@ fun build() -> Page {
 
 fun main() {
     match build().write_static("dist-router") {
-        Ok(out) -> println("router: wrote ${out.file_count()} files"),
-        Err(error) -> println(error.message()),
+        case Ok(out) { println("router: wrote ${out.file_count()} files") }
+        case Err(error) { println(error.message()) }
     }
 }

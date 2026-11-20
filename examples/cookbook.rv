@@ -4,11 +4,11 @@
 //   raven build examples/cookbook.rv -o target/cookbook.exe
 //   ./target/cookbook.exe        # writes dist-cookbook/
 
-import std/io { println }
-import "../lib" { Behavior, Expr, Node, Page, Signal, Stylesheet, signal, transition_styles }
+from std.io import println
+from "../lib" import Behavior, Expr, Node, Page, Signal, Stylesheet, signal, transition_styles
 
 // ----- accordion: a signal per panel, toggled, with an animated body -----
-fun accordion_item(open: Signal, heading: String, body: String) -> Node {
+fun accordion_item(open: Signal, heading: str, body: str) -> Node {
     return Node.section().class_name("acc-item").child(
         Node.button(heading).class_name("acc-head").on_click(Behavior.new().toggle(open)).aria_if(
             open,
@@ -26,14 +26,14 @@ fun accordion() -> Node {
 }
 
 // ----- tabs: one signal holds the active index -----
-fun tab_button(active: Signal, index: String, label: String) -> Node {
+fun tab_button(active: Signal, index: str, label: str) -> Node {
     return Node.button(label).class_name("tab").on_click(Behavior.new().set(active, index)).class_when(
         Expr.eq(Expr.of(active), Expr.text(index)),
         "active",
     )
 }
 
-fun tab_panel(active: Signal, index: String, body: String) -> Node {
+fun tab_panel(active: Signal, index: str, body: str) -> Node {
     return Node.div().class_name("tab-panel").child_text(body).visible_when(
         Expr.eq(Expr.of(active), Expr.text(index)),
     )
@@ -138,8 +138,8 @@ fun build() {
         styles(),
     ).signal(menu).signal(tab).signal(acc_a).signal(acc_b).strict()
     match page.write_static("dist-cookbook") {
-        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 

@@ -1,11 +1,11 @@
 // A worked example of testing a raven-web site, referenced by docs/TESTING.md.
 // In a real project these assertions live in a *_test.rv file run by
 // `rvpm test`; here they run from main() so the example is self-contained and
-// provable with `raven build examples/site_test.rv -o t.exe && ./t.exe`.
+// provable with `raven build examples/site_test.rv -o t.exe and ./t.exe`.
 
-import std/io { println }
-import std/test { assert_false, assert_true }
-import "../lib" { Behavior, Node, Page, signal }
+from std.io import println
+from std.test import assert_false, assert_true
+from "../lib" import Behavior, Node, Page, signal
 
 // The unit under test: a small page builder, exactly as a site would define
 // it. Tests assert over its emitted html(), css(), and warnings().

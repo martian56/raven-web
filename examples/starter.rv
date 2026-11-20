@@ -5,12 +5,12 @@
 //   ./target/starter.exe dev        # serve it, watch sources, live reload
 //
 // In your own project the imports become:
-//   import "github.com/martian56/raven-web" { ... }
-//   import "github.com/martian56/raven-web/dev" { cli }
+//   from "github.com/martian56/raven-web" import ...
+//   from "github.com/martian56/raven-web/dev" import cli
 
-import std/io { println }
-import "../lib" { Behavior, CssRule, Node, Page, Stylesheet, signal }
-import "../dev" { cli }
+from std.io import println
+from "../lib" import Behavior, CssRule, Node, Page, Stylesheet, signal
+from "../dev" import cli
 
 fun view() -> Node {
     let count = signal("count", "0")
@@ -45,15 +45,11 @@ fun build() {
         styles(),
     ).signal(count)
     match page.write_static("dist-starter") {
-        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("examples/starter.rv", "dist-starter").run(
-        fun() -> Unit {
-            build()
-        },
-    )
+    cli("examples/starter.rv", "dist-starter").run(() => build())
 }

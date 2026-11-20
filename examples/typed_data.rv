@@ -5,23 +5,23 @@
 // spinner, no empty flash. The same signal is still live, so a behavior can
 // filter or replace it afterwards.
 
-import std/io { println }
-import std/json { ToJson }
-import "../lib" { Behavior, Expr, Node, Page, Signal, Stylesheet, signal, signal_of }
+from std.io import println
+from std.json import ToJson
+from "../lib" import Behavior, Expr, Node, Page, Signal, Stylesheet, signal, signal_of
 
 @derive(ToJson)
-struct Task {
-    id: Int,
-    title: String,
-    status: String,
+class Task {
+    id: int
+    title: str
+    status: str
 }
 
 // Stands in for a database read at build time.
-fun board() -> List<Task> {
+fun board() -> list[Task] {
     return [
-        Task { id: 1, title: "Draft the spec", status: "done" },
-        Task { id: 2, title: "Wire the router", status: "doing" },
-        Task { id: 3, title: "Ship the release", status: "todo" },
+        Task(id: 1, title: "Draft the spec", status: "done"),
+        Task(id: 2, title: "Wire the router", status: "doing"),
+        Task(id: 3, title: "Ship the release", status: "todo"),
     ]
 }
 
@@ -60,7 +60,7 @@ fun build() -> Page {
 
 fun main() {
     match build().write_static("dist-typed") {
-        Ok(out) -> println("typed_data: wrote ${out.file_count()} files"),
-        Err(error) -> println(error.message()),
+        case Ok(out) { println("typed_data: wrote ${out.file_count()} files") }
+        case Err(error) { println(error.message()) }
     }
 }

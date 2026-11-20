@@ -5,14 +5,14 @@
 //   ./site.exe                # write dist-landing/
 //
 // In your own project the imports become:
-//   import "github.com/martian56/raven-web" { ... }
-//   import "github.com/martian56/raven-web/dev" { cli }
+//   from "github.com/martian56/raven-web" import ...
+//   from "github.com/martian56/raven-web/dev" import cli
 
-import std/io { println }
-import "../../lib" { Behavior, Node, Page, Stylesheet, signal }
-import "../../dev" { cli }
+from std.io import println
+from "../../lib" import Behavior, Node, Page, Stylesheet, signal
+from "../../dev" import cli
 
-fun feature(title: String, body: String) -> Node {
+fun feature(title: str, body: str) -> Node {
     return Node.article().class_name("feature").child(Node.h3().child_text(title)).child(
         Node.p().child_text(body),
     )
@@ -83,15 +83,11 @@ fun build() {
         styles(),
     ).signal(open).strict()
     match page.write_static("dist-landing") {
-        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("examples/starters/landing.rv", "dist-landing").run(
-        fun() -> Unit {
-            build()
-        },
-    )
+    cli("examples/starters/landing.rv", "dist-landing").run(() => build())
 }
