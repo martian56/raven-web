@@ -4,37 +4,37 @@
 //   ./site.exe dev
 //   ./site.exe                # writes dist-portfolio/
 
-import std/io { println }
-import "../../lib" { Node, Page, Stylesheet, StaticFile }
-import "../../dev" { cli }
+from std.io import println
+from "../../lib" import Node, Page, Stylesheet, StaticFile
+from "../../dev" import cli
 
-struct Project {
-    name: String,
-    blurb: String,
-    url: String,
-    tags: List<String>,
+class Project {
+    name: str
+    blurb: str
+    url: str
+    tags: list[str]
 }
 
-fun projects() -> List<Project> {
+fun projects() -> list[Project] {
     return [
-        Project {
+        Project(
             name: "Quanta",
             blurb: "A small, fast database engine.",
             url: "https://example.com/quanta",
             tags: ["Rust", "Systems"],
-        },
-        Project {
+        ),
+        Project(
             name: "Loom",
             blurb: "A terminal UI toolkit.",
             url: "https://example.com/loom",
             tags: ["TUI", "Library"],
-        },
-        Project {
+        ),
+        Project(
             name: "Atlas",
             blurb: "A static maps renderer.",
             url: "https://example.com/atlas",
             tags: ["Graphics"],
-        },
+        ),
     ]
 }
 
@@ -89,15 +89,11 @@ fun build() {
         "Portfolio of Ada Lovelace, software engineer.",
     ).with_styles(styles()).file(StaticFile.new("robots.txt", "User-agent: *\nAllow: /\n")).strict()
     match page.write_static("dist-portfolio") {
-        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("examples/starters/portfolio.rv", "dist-portfolio").run(
-        fun() -> Unit {
-            build()
-        },
-    )
+    cli("examples/starters/portfolio.rv", "dist-portfolio").run(() => build())
 }

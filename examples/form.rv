@@ -6,13 +6,13 @@
 // data the runtime evaluates. Note what is absent: no CSS selector, no state
 // string, no JavaScript.
 
-import std/io { println }
-import "../lib" { Behavior, Ctx, Expr, Node, Page, Signal, Stylesheet, app }
+from std.io import println
+from "../lib" import Behavior, Ctx, Expr, Node, Page, Signal, Stylesheet, app
 
 // Shown once the field has been left and its rule is broken, so an untouched
 // form is not a wall of red. role=alert means it is read out when it appears,
 // and the id is what the input points at.
-fun error_text(id: String, message: String, touched: Signal, broken: Expr) -> Node {
+fun error_text(id: str, message: str, touched: Signal, broken: Expr) -> Node {
     return Node.p().id(id).class_name("err").attr("role", "alert").child_text(message).visible_when(
         Expr.and(Expr.of(touched), broken),
     )
@@ -23,7 +23,7 @@ fun error_text(id: String, message: String, touched: Signal, broken: Expr) -> No
 // The parts that make it announce properly: the label is tied to the input by
 // id, aria-describedby points at the error text, and aria-invalid tracks the
 // rule. Without those a screen reader user gets a red message they never hear.
-fun field(ctx: Ctx, label: String, value: Signal, message: String, broken: Expr) -> Node {
+fun field(ctx: Ctx, label: str, value: Signal, message: str, broken: Expr) -> Node {
     let touched = ctx.local("touched", "")
     let input_id = ctx.id_for("input")
     let error_id = ctx.id_for("error")
@@ -86,7 +86,7 @@ fun build() -> Page {
 
 fun main() {
     match build().write_static("dist-form") {
-        Ok(out) -> println("form: wrote ${out.file_count()} files"),
-        Err(error) -> println(error.message()),
+        case Ok(out) { println("form: wrote ${out.file_count()} files") }
+        case Err(error) { println(error.message()) }
     }
 }

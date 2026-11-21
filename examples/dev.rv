@@ -8,9 +8,9 @@
 // syntax and save: the compiler error appears in the browser until it is
 // fixed.
 
-import std/io { println }
-import "../lib" { Behavior, Node, Page }
-import "../dev" { cli }
+from std.io import println
+from "../lib" import Behavior, Node, Page
+from "../dev" import cli
 
 fun build() {
     let page = Page.new(
@@ -20,15 +20,11 @@ fun build() {
         ).child(Node.p().id("note").child_text("Edit examples/dev.rv and save to see this reload.")),
     )
     match page.write_static("dist") {
-        Ok(out) -> println("built ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("built ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("examples/dev.rv", "dist").run(
-        fun() -> Unit {
-            build()
-        },
-    )
+    cli("examples/dev.rv", "dist").run(() => build())
 }

@@ -5,8 +5,8 @@
 //   raven build examples/blog.rv -o target/blog.exe
 //   ./target/blog.exe            # writes dist-blog/
 
-import std/io { println }
-import "../lib" { Document, FeedEntry, Layout, Node, Page, Site, StaticFile, atom_feed, load_documents, sort_documents_desc }
+from std.io import println
+from "../lib" import Document, FeedEntry, Layout, Node, Page, Site, StaticFile, atom_feed, load_documents, sort_documents_desc
 
 fun shell() -> Layout {
     return Layout.new().header(Node.header().child(Node.link("The Raven Blog", "/"))).footer(
@@ -14,11 +14,11 @@ fun shell() -> Layout {
     )
 }
 
-fun post_url(post: Document) -> String {
+fun post_url(post: Document) -> str {
     return "https://blog.example.com/posts/".concat(post.slug).concat("/")
 }
 
-fun index_page(posts: List<Document>, layout: Layout, feed: String) -> Page {
+fun index_page(posts: list[Document], layout: Layout, feed: str) -> Page {
     let listing = Node.ul()
     for post in posts {
         let _ = listing.child(
@@ -36,15 +36,15 @@ fun index_page(posts: List<Document>, layout: Layout, feed: String) -> Page {
 fun main() {
     let layout = shell()
     let posts = sort_documents_desc(load_documents("examples/content"), "date")
-    let entries: List<FeedEntry> = []
+    let entries: list[FeedEntry] = []
     for post in posts {
         entries.push(
-            FeedEntry {
+            FeedEntry(
                 title: post.get("title"),
                 url: post_url(post),
                 date: post.get("date"),
                 summary: post.get("summary"),
-            },
+            ),
         )
     }
     let feed = atom_feed(
@@ -63,7 +63,7 @@ fun main() {
         )
     }
     match site.write_static("dist-blog") {
-        Ok(out) -> println("wrote ".concat(out.page_count().to_string()).concat(" pages")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.page_count().to_string()).concat(" pages")) }
+        case Err(error) { println(error.to_string()) }
     }
 }

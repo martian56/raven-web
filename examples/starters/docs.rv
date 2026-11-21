@@ -5,44 +5,40 @@
 //   ./site.exe dev
 //   ./site.exe                # writes dist-docs/ (clean URLs per page)
 
-import std/io { println }
-import "../../lib" { Node, Page, Site, Stylesheet, markdown, syntax_styles }
-import "../../dev" { cli }
+from std.io import println
+from "../../lib" import Node, Page, Site, Stylesheet, markdown, syntax_styles
+from "../../dev" import cli
 
-struct Doc {
-    slug: String,
-    title: String,
-    body: String,
+class Doc {
+    slug: str
+    title: str
+    body: str
 }
 
-fun docs() -> List<Doc> {
+fun docs() -> list[Doc] {
     return [
-        Doc {
+        Doc(
             slug: "",
             title: "Getting started",
             body: "# Getting started\n\nWelcome. Every page here is **markdown** rendered through the safe builders. Pick a topic from the sidebar.\n\n- Finished HTML on first paint.\n- Every link judged by scheme.\n- Raw HTML in a document is text, not markup.",
-        },
-        Doc {
+        ),
+        Doc(
             slug: "install",
             title: "Install",
             body: "# Install\n\nAdd the dependency, then build:\n\n```bash\nrvpm build\n./site dev\n```\n\nThe dev server watches your source and reloads the browser on save.",
-        },
-        Doc {
+        ),
+        Doc(
             slug: "guide",
             title: "Your first page",
             body: "# Your first page\n\nA page is a value. Return a `Node` tree and write it out:\n\n```raven\nlet page = Page.new(\"Hello\", Node.h1().child_text(\"Hi\"))\nmatch page.write_static(\"dist\") {\n    Ok(_) -> print(\"done\"),\n    Err(e) -> print(e.message()),\n}\n```\n\n> Fenced code blocks are highlighted at build time.",
-        },
+        ),
     ]
 }
 
-fun sidebar(active: String) -> Node {
+fun sidebar(active: str) -> Node {
     let list = Node.ul()
     for doc in docs() {
-        let href = if doc.slug == "" {
-            "/"
-        } else {
-            "/".concat(doc.slug).concat("/")
-        }
+        let href = "/" if doc.slug == "" else "/".concat(doc.slug).concat("/")
         let link = Node.new("a").href(href).child_text(doc.title)
         if doc.slug == active {
             let _ = link.class_name("active")
@@ -78,23 +74,15 @@ fun styles() -> Stylesheet {
 fun build() {
     let site = Site.new("https://docs.example.com")
     for doc in docs() {
-        let route = if doc.slug == "" {
-            "/"
-        } else {
-            "/".concat(doc.slug)
-        }
+        let route = "/" if doc.slug == "" else "/".concat(doc.slug)
         let _ = site.page(route, page_for(doc))
     }
     match site.write_static("dist-docs") {
-        Ok(out) -> println("wrote ".concat(out.page_count().to_string()).concat(" pages")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.page_count().to_string()).concat(" pages")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("examples/starters/docs.rv", "dist-docs").run(
-        fun() -> Unit {
-            build()
-        },
-    )
+    cli("examples/starters/docs.rv", "dist-docs").run(() => build())
 }

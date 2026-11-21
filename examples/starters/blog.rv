@@ -6,38 +6,38 @@
 //   ./site.exe dev
 //   ./site.exe                # writes dist-myblog/
 
-import std/io { println }
-import "../../lib" { FeedEntry, Node, Page, Site, StaticFile, Stylesheet, atom_feed, markdown, syntax_styles }
-import "../../dev" { cli }
+from std.io import println
+from "../../lib" import FeedEntry, Node, Page, Site, StaticFile, Stylesheet, atom_feed, markdown, syntax_styles
+from "../../dev" import cli
 
-struct Post {
-    slug: String,
-    title: String,
-    date: String,
-    summary: String,
-    body: String,
+class Post {
+    slug: str
+    title: str
+    date: str
+    summary: str
+    body: str
 }
 
-fun posts() -> List<Post> {
+fun posts() -> list[Post] {
     return [
-        Post {
+        Post(
             slug: "hello",
             title: "Hello, world",
             date: "2026-07-16",
             summary: "Why this blog exists.",
             body: "# Hello, world\n\nThis blog is built by **raven-web**. Each post is markdown, rendered through the safe builders, and the whole site is static files.\n\n- No JavaScript to write.\n- Finished HTML on first paint.\n- A feed and a sitemap, for free.",
-        },
-        Post {
+        ),
+        Post(
             slug: "static-first",
             title: "Static first",
             date: "2026-07-01",
             summary: "The browser never waits on a script.",
             body: "# Static first\n\nThe page is *complete* at build time.\n\n```raven\nlet page = Page.new(\"Post\", markdown(body))\n```\n\n> Content never waits on a script.",
-        },
+        ),
     ]
 }
 
-fun shell(title: String, body: Node) -> Node {
+fun shell(title: str, body: Node) -> Node {
     return Node.div().class_name("page").child(
         Node.header().class_name("masthead").child(
             Node.new("a").href("/").class_name("brand").child_text("The Example Blog"),
@@ -83,16 +83,16 @@ fun styles() -> Stylesheet {
     )
 }
 
-fun feed() -> String {
-    let entries: List<FeedEntry> = []
+fun feed() -> str {
+    let entries: list[FeedEntry] = []
     for post in posts() {
         entries.push(
-            FeedEntry {
+            FeedEntry(
                 title: post.title,
                 url: "https://blog.example.com/posts/".concat(post.slug).concat("/"),
                 date: post.date,
                 summary: post.summary,
-            },
+            ),
         )
     }
     return atom_feed(
@@ -117,15 +117,11 @@ fun build() {
         let _ = site.page("/posts/".concat(post.slug), page).lastmod(post.date)
     }
     match site.write_static("dist-myblog") {
-        Ok(out) -> println("wrote ".concat(out.page_count().to_string()).concat(" pages")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.page_count().to_string()).concat(" pages")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("examples/starters/blog.rv", "dist-myblog").run(
-        fun() -> Unit {
-            build()
-        },
-    )
+    cli("examples/starters/blog.rv", "dist-myblog").run(() => build())
 }

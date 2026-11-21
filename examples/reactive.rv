@@ -9,10 +9,10 @@
 //                           neither of which a flat effect list could express
 // (class names below exist only so the browser test can find things.)
 
-import std/io { println }
-import "../lib" { Behavior, Expr, Node, Page, Signal, StaticFile, Stylesheet, request, signal }
+from std.io import println
+from "../lib" import Behavior, Expr, Node, Page, Signal, StaticFile, Stylesheet, request, signal
 
-fun rows_json() -> String {
+fun rows_json() -> str {
     return "[{\"id\":1,\"title\":\"Alpha\"},{\"id\":2,\"title\":\"Beta\"},{\"id\":3,\"title\":\"Gamma\"}]"
 }
 
@@ -64,7 +64,7 @@ fun build() -> Page {
 
 fun main() {
     match build().write_static("dist-probe") {
-        Ok(out) -> println("probe: wrote ${out.file_count()} files"),
-        Err(error) -> println(error.message()),
+        case Ok(out) { println("probe: wrote ${out.file_count()} files") }
+        case Err(error) { println(error.message()) }
     }
 }

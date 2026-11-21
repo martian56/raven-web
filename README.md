@@ -17,10 +17,10 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.19.0"
+"github.com/martian56/raven-web" = "v0.20.0"
 ```
 
-Raven Web is tested with Raven 2.26.1 on Linux and Windows.
+Raven Web needs Raven 3.0.0 or newer and is tested on Linux and Windows.
 
 ## Quickstart
 
@@ -28,9 +28,9 @@ One file is a whole project. Save this as `site.rv` next to the `rv.toml`
 above (or copy `examples/starter.rv`):
 
 ```rust
-import std/io { println }
-import "github.com/martian56/raven-web" { Behavior, Node, Page, signal }
-import "github.com/martian56/raven-web/dev" { cli }
+from std.io import println
+from "github.com/martian56/raven-web" import Behavior, Node, Page, signal
+from "github.com/martian56/raven-web/dev" import cli
 
 fun build() {
     let count = signal("count", "0")
@@ -41,15 +41,13 @@ fun build() {
         ).child(Node.strong().text_of(count)),
     ).signal(count)
     match page.write_static("dist") {
-        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("site.rv", "dist").run(fun() -> Unit {
-        build()
-    })
+    cli("site.rv", "dist").run(() => build())
 }
 ```
 
@@ -102,15 +100,15 @@ also has a `try_*` twin that returns a `Result` when one call site wants the
 rejection as a value.
 
 ```rust
-import "github.com/martian56/raven-web" { Behavior, Component, Node, Page, Stylesheet }
+from "github.com/martian56/raven-web" import Behavior, Component, Node, Page, Stylesheet
 
-struct Hero {
-    title: String,
+class Hero {
+    title: str
 }
 
 impl Hero {
-    fun new(title: String) -> Hero {
-        return Hero { title }
+    fun new(title: str) -> Hero {
+        return Hero(title: title)
     }
 }
 
@@ -127,8 +125,8 @@ fun main() {
         "A Raven-generated static page.",
     ).with_styles(Stylesheet.new().raw(".hero { padding: 4rem; }"))
     match page.write_static("dist") {
-        Ok(_) -> print("wrote dist"),
-        Err(e) -> print(e.message()),
+        case Ok(_) { print("wrote dist") }
+        case Err(e) { print(e.message()) }
     }
 }
 ```
@@ -202,13 +200,13 @@ on first paint: no request, no spinner, no empty flash.
 
 ```rust
 @derive(ToJson)
-struct Task {
-    id: Int,
-    title: String,
-    status: String,
+class Task {
+    id: int,
+    title: str,
+    status: str,
 }
 
-let tasks = signal_of("tasks", board().to_json())   // board() -> List<Task>
+let tasks = signal_of("tasks", board().to_json())   // board() -> list[Task]
 Node.ul().each_of(tasks, row())
 Page.new("Board", body).signal(tasks)
 ```
@@ -222,9 +220,9 @@ and `ctx.local_of` gives a component structured local state.
 The pieces a screen reader needs are bindings like any other.
 
 ```rust
-fun accordion(ctx: Ctx, heading: String, body: String) -> Node {
+fun accordion(ctx: Ctx, heading: str, body: str) -> Node {
     let open = ctx.local("open", "")
-    let panel = ctx.id_for("panel")          // unique to this instance
+    let panel = ctx.id_for("panel") // unique to this instance
     return Node.section().child(
         Node.button(heading).attr("aria-controls", panel).aria_if(open, "expanded"),
     ).child(Node.p().id(panel).child_text(body).visible_if(open))
@@ -322,11 +320,11 @@ without inventing a global key, so one component can be reused on a page and
 each copy behaves independently.
 
 ```rust
-fun counter(ctx: Ctx, label: String, step: Int) -> Node {
+fun counter(ctx: Ctx, label: str, step: int) -> Node {
     let n = ctx.local("n", "0")
-    return Node.div().child(Node.span().child_text(label)).child(
-        Node.span().text_of(n),
-    ).child(Node.button("+").on_click(Behavior.new().increment(n, step)))
+    return Node.div().child(Node.span().child_text(label)).child(Node.span().text_of(n)).child(
+        Node.button("+").on_click(Behavior.new().increment(n, step)),
+    )
 }
 
 fun build() -> Page {
@@ -334,7 +332,7 @@ fun build() -> Page {
     let view = Node.div().child(counter(ui.instance(), "clicks", 1)).child(
         counter(ui.instance(), "by five", 5),
     )
-    return ui.page("Counters", view)   // registers every local that was declared
+    return ui.page("Counters", view) // registers every local that was declared
 }
 ```
 
@@ -408,7 +406,7 @@ Page.new("App", Node.main_node().child(nav).child(router.to_node())).spa()
 ## Multi-page sites
 
 ```rust
-import "github.com/martian56/raven-web" { Layout, Node, Site }
+from "github.com/martian56/raven-web" import Layout, Node, Site
 
 let layout = Layout.new().header(Node.header().child_text("My site")).footer(
     Node.footer().child_text("(c) 2026"),
@@ -426,7 +424,7 @@ Each route becomes a clean-URL directory (`/about` to `about/index.html`).
 ## Design tokens and themes
 
 ```rust
-import "github.com/martian56/raven-web" { Theme }
+from "github.com/martian56/raven-web" import Theme
 
 let theme = Theme.new().color("bg", "#ffffff", "#0b1020").color("fg", "#111111", "#e6edf6").scale(
     "space-3",
@@ -445,12 +443,10 @@ which a `Behavior` can set for a manual toggle.
 project works the same way:
 
 ```rust
-import "github.com/martian56/raven-web/dev" { cli }
+from "github.com/martian56/raven-web/dev" import cli
 
 fun main() {
-    cli("site.rv", "dist").run(fun() -> Unit {
-        build()
-    })
+    cli("site.rv", "dist").run(() => build())
 }
 ```
 
@@ -601,7 +597,7 @@ raven build examples/starters/landing.rv -o site.exe
   state surviving navigation.
 - `examples/form.rv`: a validated signup form with controlled fields,
   cross-field rules, and errors that wait until a field is left.
-- `examples/typed_data.rv`: a typed `List<Task>` rendered on first paint with no
+- `examples/typed_data.rv`: a typed `list[Task]` rendered on first paint with no
   request.
 - `examples/bench.rv`: the page the performance numbers are measured on (200
   component instances plus a 500 row list).

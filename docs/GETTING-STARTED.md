@@ -6,7 +6,7 @@ through it.
 
 ## What you need
 
-- Raven 2.26.1 or newer on PATH (`raven -V`), which also installs `rvpm`.
+- Raven 3.0.0 or newer on PATH (`raven -V`), which also installs `rvpm`.
 - Nothing else. No Node, no bundler, no JavaScript.
 
 ## A project in one file
@@ -17,18 +17,18 @@ Make a directory with two files. `rv.toml`:
 [package]
 name = "my-site"
 version = "0.1.0"
-edition = "v2"
+edition = "v3"
 
 [dependencies]
-"github.com/martian56/raven-web" = "v0.12.0"
+"github.com/martian56/raven-web" = "v0.20.0"
 ```
 
 and `site.rv`:
 
 ```rust
-import std/io { println }
-import "github.com/martian56/raven-web" { Behavior, Node, Page, signal }
-import "github.com/martian56/raven-web/dev" { cli }
+from std.io import println
+from "github.com/martian56/raven-web" import Behavior, Node, Page, signal
+from "github.com/martian56/raven-web/dev" import cli
 
 fun build() {
     let count = signal("count", "0")
@@ -39,15 +39,13 @@ fun build() {
         ).child(Node.strong().text_of(count)),
     ).signal(count)
     match page.write_static("dist") {
-        Ok(out) -> println("wrote ".concat(out.file_count().to_string()).concat(" files")),
-        Err(error) -> println(error.to_string()),
+        case Ok(out) { println("wrote ".concat(out.file_count().to_string()).concat(" files")) }
+        case Err(error) { println(error.to_string()) }
     }
 }
 
 fun main() {
-    cli("site.rv", "dist").run(fun() -> Unit {
-        build()
-    })
+    cli("site.rv", "dist").run(() => build())
 }
 ```
 
@@ -118,11 +116,11 @@ A component is an ordinary Raven function whose props are typed parameters.
 `ctx.local` gives each instance private state:
 
 ```rust
-fun counter(ctx: Ctx, label: String, step: Int) -> Node {
+fun counter(ctx: Ctx, label: str, step: int) -> Node {
     let n = ctx.local("n", "0")
-    return Node.div().child(Node.span().child_text(label)).child(
-        Node.span().text_of(n),
-    ).child(Node.button("+").on_click(Behavior.new().increment(n, step)))
+    return Node.div().child(Node.span().child_text(label)).child(Node.span().text_of(n)).child(
+        Node.button("+").on_click(Behavior.new().increment(n, step)),
+    )
 }
 
 fun build_page() -> Page {
@@ -150,9 +148,9 @@ document on first paint with no request and no spinner:
 
 ```rust
 @derive(ToJson)
-struct Task {
-    id: Int,
-    title: String,
+class Task {
+    id: int,
+    title: str,
 }
 
 let tasks = signal_of("tasks", board().to_json())

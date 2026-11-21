@@ -8,8 +8,8 @@
 //
 // Note what is absent: no CSS selector, no state string, no JavaScript.
 
-import std/io { println }
-import "../lib" { Behavior, Ctx, Expr, Node, Page, Stylesheet, app }
+from std.io import println
+from "../lib" import Behavior, Ctx, Expr, Node, Page, Stylesheet, app
 
 // A section that opens and closes. Used three times below; each copy keeps its
 // own open state.
@@ -18,7 +18,7 @@ import "../lib" { Behavior, Ctx, Expr, Node, Page, Stylesheet, app }
 // aria-controls points at this instance's own panel. ctx.id_for is what makes
 // that possible with the component used three times, since a hard-coded id
 // would collide.
-fun accordion(ctx: Ctx, heading: String, body: String) -> Node {
+fun accordion(ctx: Ctx, heading: str, body: str) -> Node {
     let open = ctx.local("open", "")
     let panel = ctx.id_for("panel")
     return Node.section().class_name("acc").child(
@@ -30,7 +30,7 @@ fun accordion(ctx: Ctx, heading: String, body: String) -> Node {
 }
 
 // A counter whose step is a prop. Two instances, two independent totals.
-fun counter(ctx: Ctx, label: String, step: Int) -> Node {
+fun counter(ctx: Ctx, label: str, step: int) -> Node {
     let n = ctx.local("n", "0")
     return Node.div().class_name("counter").child(
         Node.span().class_name("counter-label").child_text(label),
@@ -46,7 +46,7 @@ fun counter(ctx: Ctx, label: String, step: Int) -> Node {
 
 // A component that renders components: the card owns state of its own and still
 // nests two counters, each of which gets its own scope.
-fun card(ctx: Ctx, heading: String) -> Node {
+fun card(ctx: Ctx, heading: str) -> Node {
     let collapsed = ctx.local("collapsed", "")
     let inner = Node.div().class_name("card-body").hidden_if(collapsed).child(
         counter(ctx.instance(), "clicks", 1),
@@ -81,7 +81,7 @@ fun build() -> Page {
 
 fun main() {
     match build().write_static("dist-components") {
-        Ok(out) -> println("components: wrote ${out.file_count()} files"),
-        Err(error) -> println(error.message()),
+        case Ok(out) { println("components: wrote ${out.file_count()} files") }
+        case Err(error) { println(error.message()) }
     }
 }

@@ -1,31 +1,31 @@
 // raven-web: safe browser artifacts for Raven.
 
-import std/json { JsonValue, stringify }
-import std/fs { basename, create_dir_all, dirname, join, list_dir, read, remove_file, walk, write }
-import std/error { Error }
-import std/io { println }
-import std/hash { fnv1a }
+from std.json import JsonValue, stringify
+from std.fs import basename, create_dir_all, dirname, join, list_dir, read, remove_file, walk, write
+from std.error import Error
+from std.io import println
+from std.hash import fnv1a
 
-struct Attribute {
-    name: String,
-    value: String,
+class Attribute {
+    name: str
+    value: str
 }
 
 // A typed handle to one piece of client state. Declare it once with `signal`,
 // then pass the value everywhere: views bind to it and behaviors write to it
 // without naming a CSS selector or repeating a state string. `key` is the root
 // state key; `path` is what a reader resolves (the same, or deeper via `at`).
-struct Signal {
-    key: String,
-    path: String,
-    initial: String,
+class Signal {
+    key: str
+    path: str
+    initial: str
     // True when `initial` is already JSON (an object, array, or number) rather
     // than a plain string that has to be quoted on the way out.
-    raw: Bool,
+    raw: bool
 }
 
-fun signal(name: String, initial: String) -> Signal {
-    return Signal { key: name, path: name, initial, raw: false }
+fun signal(name: str, initial: str) -> Signal {
+    return Signal(key: name, path: name, initial: initial, raw: false)
 }
 
 // A signal seeded with structured data. This is how a typed Raven value reaches
@@ -34,20 +34,20 @@ fun signal(name: String, initial: String) -> Signal {
 //
 //   let tasks = signal_of("tasks", board.to_json())
 //   Node.ul().each_of(tasks, row())
-fun signal_of(name: String, initial: JsonValue) -> Signal {
-    return Signal { key: name, path: name, initial: stringify(initial), raw: true }
+fun signal_of(name: str, initial: JsonValue) -> Signal {
+    return Signal(key: name, path: name, initial: stringify(initial), raw: true)
 }
 
 impl Signal {
     // Read a field of a stored JSON value: auth.at("token") reads auth.token.
     // Writes still target the root key, so `at` is for reading.
-    fun at(self, field: String) -> Signal {
-        return Signal {
+    fun at(self, field: str) -> Signal {
+        return Signal(
             key: self.key,
             path: self.path.concat(".").concat(field),
             initial: "",
             raw: false,
-        }
+        )
     }
 }
 
@@ -60,7 +60,7 @@ impl Signal {
 // namespaces the key, so the same component used twice has two independent
 // pieces of state without the author naming either.
 //
-//   fun counter(ctx: Ctx, label: String) -> Node {
+//   fun counter(ctx: Ctx, label: str) -> Node {
 //       let n = ctx.local("n", "0")
 //       return Node.div().child(Node.span().text_of(n)).child(
 //           Node.button("+").on_click(Behavior.new().increment(n, 1)))
@@ -77,20 +77,20 @@ impl Signal {
 // Instances are allocated while the tree is built, so a component is expanded at
 // build time. A stateful component cannot yet be repeated per item of a
 // runtime-fetched list; list rows remain {{field}} templates.
-struct Scope {
-    states: List<StatePair>,
-    next: Int,
+class Scope {
+    states: list[StatePair]
+    next: int
 }
 
-struct Ctx {
-    scope: Scope,
-    id: String,
+class Ctx {
+    scope: Scope
+    id: str
 }
 
 // The root scope for a page.
 fun app() -> Ctx {
-    let states: List<StatePair> = []
-    return Ctx { scope: Scope { states, next: 0 }, id: "r" }
+    let states: list[StatePair] = []
+    return Ctx(scope: Scope(states: states, next: 0), id: "r")
 }
 
 impl Ctx {
@@ -99,14 +99,14 @@ impl Ctx {
     fun instance(self) -> Ctx {
         let id = "c".concat(self.scope.next.to_string())
         self.scope.next = self.scope.next + 1
-        return Ctx { scope: self.scope, id }
+        return Ctx(scope: self.scope, id: id)
     }
 
     // State private to this instance. The returned Signal is used exactly like a
     // global one; only its key is scoped.
-    fun local(self, name: String, initial: String) -> Signal {
+    fun local(self, name: str, initial: str) -> Signal {
         let key = self.id.concat("_").concat(name)
-        self.scope.states.push(StatePair { key, value: initial, raw: false })
+        self.scope.states.push(StatePair(key: key, value: initial, raw: false))
         return signal(key, initial)
     }
 
@@ -117,26 +117,26 @@ impl Ctx {
     //   let panel = ctx.id_for("panel")
     //   Node.button(title).attr("aria-controls", panel).aria_if(open, "expanded")
     //   Node.div().id(panel).visible_if(open)
-    fun id_for(self, name: String) -> String {
+    fun id_for(self, name: str) -> str {
         return self.id.concat("_").concat(name)
     }
 
     // Instance state seeded with structured data, so a component can be handed
     // a typed value as its starting point.
-    fun local_of(self, name: String, initial: JsonValue) -> Signal {
+    fun local_of(self, name: str, initial: JsonValue) -> Signal {
         let key = self.id.concat("_").concat(name)
         let source = signal_of(key, initial)
-        self.scope.states.push(StatePair { key, value: source.initial, raw: true })
+        self.scope.states.push(StatePair(key: key, value: source.initial, raw: true))
         return source
     }
 
     // Build the page, registering every local declared during the tree build.
-    fun page(self, title: String, view: Node) -> Page {
+    fun page(self, title: str, view: Node) -> Page {
         let page = Page.new(title, view)
         for pair in self.scope.states {
             // Carried over whole: a local made with local_of is already JSON and
             // must not be re-quoted on the way out.
-            page.state.push(StatePair { key: pair.key, value: pair.value, raw: pair.raw })
+            page.state.push(StatePair(key: pair.key, value: pair.value, raw: pair.raw))
         }
         return page
     }
@@ -148,10 +148,10 @@ impl Ctx {
 // and safety model hold. Dependencies are derived from the tree, so a binding
 // built from an expression updates when any signal it reads changes.
 enum Expr {
-    Sig(String),
-    Str(String),
-    Num(Int),
-    Bool(Bool),
+    Sig(str),
+    Str(str),
+    Num(int),
+    Bool(bool),
     Not(Expr),
     Len(Expr),
     IsEmpty(Expr),
@@ -164,7 +164,7 @@ enum Expr {
     Add(Expr, Expr),
     Sub(Expr, Expr),
     Concat(Expr, Expr),
-    Matches(Expr, String),
+    Matches(Expr, str),
     Ternary(Expr, Expr, Expr),
 }
 
@@ -172,11 +172,11 @@ impl Expr {
     // Read a signal (or a path into one, via Signal.at).
     fun of(source: Signal) -> Expr = Expr.Sig(source.path)
 
-    fun text(value: String) -> Expr = Expr.Str(value)
+    fun text(value: str) -> Expr = Expr.Str(value)
 
-    fun int(value: Int) -> Expr = Expr.Num(value)
+    fun int(value: int) -> Expr = Expr.Num(value)
 
-    fun flag(value: Bool) -> Expr = Expr.Bool(value)
+    fun flag(value: bool) -> Expr = Expr.Bool(value)
 
     fun not(inner: Expr) -> Expr = Expr.Not(inner)
 
@@ -207,54 +207,54 @@ impl Expr {
     // authored, never taken from user input, and is compiled by the runtime as
     // a RegExp: it is data, not code, so nothing is eval'd. An invalid pattern
     // matches nothing rather than throwing.
-    fun matches(value: Expr, pattern: String) -> Expr = Expr.Matches(value, pattern)
+    fun matches(value: Expr, pattern: str) -> Expr = Expr.Matches(value, pattern)
 
     fun ternary(cond: Expr, then_value: Expr, else_value: Expr) -> Expr {
         return Expr.Ternary(cond, then_value, else_value)
     }
 }
 
-fun _serialize_expr(e: Expr) -> String {
+fun _serialize_expr(e: Expr) -> str {
     return match e {
-        Sig(path) -> _op2("sig", path),
-        Str(value) -> _op2("str", value),
-        Num(value) -> "[".concat(_js_string("num")).concat(",").concat(value.to_string()).concat(
-            "]",
-        ),
-        Bool(value) -> {
-            let flag = if value {
-                "true"
-            } else {
-                "false"
-            }
+        case Sig(path) { _op2("sig", path) }
+        case Str(value) { _op2("str", value) }
+        case Num(value) {
+            "[".concat(_js_string("num")).concat(",").concat(value.to_string()).concat("]")
+        }
+        case Bool(value) {
+            let flag = "true" if value else "false"
             "[".concat(_js_string("bool")).concat(",").concat(flag).concat("]")
-        },
-        Not(inner) -> _expr1("not", inner),
-        Len(inner) -> _expr1("len", inner),
-        IsEmpty(inner) -> _expr1("empty", inner),
-        Eq(left, right) -> _expr2("eq", left, right),
-        Ne(left, right) -> _expr2("ne", left, right),
-        Gt(left, right) -> _expr2("gt", left, right),
-        Lt(left, right) -> _expr2("lt", left, right),
-        And(left, right) -> _expr2("and", left, right),
-        Or(left, right) -> _expr2("or", left, right),
-        Add(left, right) -> _expr2("add", left, right),
-        Sub(left, right) -> _expr2("sub", left, right),
-        Concat(left, right) -> _expr2("cat", left, right),
-        Matches(value, pattern) -> "[".concat(_js_string("re")).concat(",").concat(
-            _serialize_expr(value),
-        ).concat(",").concat(_js_string(pattern)).concat("]"),
-        Ternary(cond, a, b) -> "[".concat(_js_string("if")).concat(",").concat(
-            _serialize_expr(cond),
-        ).concat(",").concat(_serialize_expr(a)).concat(",").concat(_serialize_expr(b)).concat("]"),
+        }
+        case Not(inner) { _expr1("not", inner) }
+        case Len(inner) { _expr1("len", inner) }
+        case IsEmpty(inner) { _expr1("empty", inner) }
+        case Eq(left, right) { _expr2("eq", left, right) }
+        case Ne(left, right) { _expr2("ne", left, right) }
+        case Gt(left, right) { _expr2("gt", left, right) }
+        case Lt(left, right) { _expr2("lt", left, right) }
+        case And(left, right) { _expr2("and", left, right) }
+        case Or(left, right) { _expr2("or", left, right) }
+        case Add(left, right) { _expr2("add", left, right) }
+        case Sub(left, right) { _expr2("sub", left, right) }
+        case Concat(left, right) { _expr2("cat", left, right) }
+        case Matches(value, pattern) {
+            "[".concat(_js_string("re")).concat(",").concat(_serialize_expr(value)).concat(",").concat(
+                _js_string(pattern),
+            ).concat("]")
+        }
+        case Ternary(cond, a, b) {
+            "[".concat(_js_string("if")).concat(",").concat(_serialize_expr(cond)).concat(",").concat(
+                _serialize_expr(a),
+            ).concat(",").concat(_serialize_expr(b)).concat("]")
+        }
     }
 }
 
-fun _expr1(code: String, inner: Expr) -> String {
+fun _expr1(code: str, inner: Expr) -> str {
     return "[".concat(_js_string(code)).concat(",").concat(_serialize_expr(inner)).concat("]")
 }
 
-fun _expr2(code: String, left: Expr, right: Expr) -> String {
+fun _expr2(code: str, left: Expr, right: Expr) -> str {
     return "[".concat(_js_string(code)).concat(",").concat(_serialize_expr(left)).concat(",").concat(
         _serialize_expr(right),
     ).concat("]")
@@ -262,153 +262,180 @@ fun _expr2(code: String, left: Expr, right: Expr) -> String {
 
 // Every root state key the expression reads, so the binding subscribes to all
 // of them.
-fun _expr_keys(e: Expr, out: List<String>) {
+fun _expr_keys(e: Expr, out: list[str]) {
     match e {
-        Sig(path) -> {
+        case Sig(path) {
             let key = _root_key(path)
-            if !_contains_str(out, key) {
+            if not _contains_str(out, key) {
                 out.push(key)
             }
-        },
-        Str(_) -> {},
-        Num(_) -> {},
-        Bool(_) -> {},
-        Not(inner) -> _expr_keys(inner, out),
-        Len(inner) -> _expr_keys(inner, out),
-        IsEmpty(inner) -> _expr_keys(inner, out),
-        Matches(value, _) -> _expr_keys(value, out),
-        Eq(left, right) -> {
+        }
+        case Str(_) {}
+        case Num(_) {}
+        case Bool(_) {}
+        case Not(inner) { _expr_keys(inner, out) }
+        case Len(inner) { _expr_keys(inner, out) }
+        case IsEmpty(inner) { _expr_keys(inner, out) }
+        case Matches(value, _) { _expr_keys(value, out) }
+        case Eq(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Ne(left, right) -> {
+        }
+        case Ne(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Gt(left, right) -> {
+        }
+        case Gt(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Lt(left, right) -> {
+        }
+        case Lt(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        And(left, right) -> {
+        }
+        case And(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Or(left, right) -> {
+        }
+        case Or(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Add(left, right) -> {
+        }
+        case Add(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Sub(left, right) -> {
+        }
+        case Sub(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Concat(left, right) -> {
+        }
+        case Concat(left, right) {
             _expr_keys(left, out)
             _expr_keys(right, out)
-        },
-        Ternary(cond, a, b) -> {
+        }
+        case Ternary(cond, a, b) {
             _expr_keys(cond, out)
             _expr_keys(a, out)
             _expr_keys(b, out)
-        },
+        }
     }
 }
 
 // A binding a node declares about itself. The element is identified by a marker
 // raven-web assigns at render time, so no selector is ever written by hand.
-struct NodeBind {
-    kind: String,
-    path: String,
-    arg: String,
-    filter_field: String,
-    filter_value: String,
-    expr: String,
-    dep_keys: List<String>,
+class NodeBind {
+    kind: str
+    path: str
+    arg: str
+    filter_field: str
+    filter_value: str
+    expr: str
+    dep_keys: list[str]
 }
 
-fun _node_bind(kind: String, path: String, arg: String) -> NodeBind {
-    let dep_keys: List<String> = [_root_key(path)]
-    return NodeBind {
-        kind,
-        path,
-        arg,
+fun _node_bind(kind: str, path: str, arg: str) -> NodeBind {
+    let dep_keys: list[str] = [_root_key(path)]
+    return NodeBind(
+        kind: kind,
+        path: path,
+        arg: arg,
         filter_field: "",
         filter_value: "",
         expr: "",
-        dep_keys,
-    }
+        dep_keys: dep_keys,
+    )
 }
 
 // A binding whose value is computed from an expression rather than read from a
 // single path. It depends on every signal the expression reads.
-fun _node_bind_expr(kind: String, value: Expr, arg: String) -> NodeBind {
-    let dep_keys: List<String> = []
+fun _node_bind_expr(kind: str, value: Expr, arg: str) -> NodeBind {
+    let dep_keys: list[str] = []
     _expr_keys(value, dep_keys)
-    return NodeBind {
-        kind,
+    return NodeBind(
+        kind: kind,
         path: "",
-        arg,
+        arg: arg,
         filter_field: "",
         filter_value: "",
         expr: _serialize_expr(value),
-        dep_keys,
-    }
+        dep_keys: dep_keys,
+    )
 }
 
-struct Node {
-    tag: String,
-    value: String,
-    attrs: List<Attribute>,
-    kids: List<Node>,
-    binds: List<NodeBind>,
-    mark: Int,
+class Node {
+    tag: str
+    value: str
+    attrs: list[Attribute]
+    kids: list[Node]
+    binds: list[NodeBind]
+    mark: int
     // A rejected element. It renders as nothing at all, subtree included: an
     // element that is refused because it executes code must not leave that code
     // behind as page text.
-    dropped: Bool,
+    dropped: bool
     // One line per input this node dropped. Page.warnings() collects them from
     // the whole tree, and write_static prints them, so a silent drop is still
     // safe but no longer invisible.
-    warnings: List<String>,
+    warnings: list[str]
 }
 
-fun _node(tag: String) -> Node {
-    let attrs: List<Attribute> = []
-    let kids: List<Node> = []
-    let binds: List<NodeBind> = []
-    let warnings: List<String> = []
-    return Node { tag, value: "", attrs, kids, binds, mark: -1, dropped: false, warnings }
+fun _node(tag: str) -> Node {
+    let attrs: list[Attribute] = []
+    let kids: list[Node] = []
+    let binds: list[NodeBind] = []
+    let warnings: list[str] = []
+    return Node(
+        tag: tag,
+        value: "",
+        attrs: attrs,
+        kids: kids,
+        binds: binds,
+        mark: -1,
+        dropped: false,
+        warnings: warnings,
+    )
 }
 
-fun _dropped_node(reason: String) -> Node {
-    let attrs: List<Attribute> = []
-    let kids: List<Node> = []
-    let binds: List<NodeBind> = []
-    let warnings: List<String> = [reason]
-    return Node { tag: "", value: "", attrs, kids, binds, mark: -1, dropped: true, warnings }
+fun _dropped_node(reason: str) -> Node {
+    let attrs: list[Attribute] = []
+    let kids: list[Node] = []
+    let binds: list[NodeBind] = []
+    let warnings: list[str] = [reason]
+    return Node(
+        tag: "",
+        value: "",
+        attrs: attrs,
+        kids: kids,
+        binds: binds,
+        mark: -1,
+        dropped: true,
+        warnings: warnings,
+    )
 }
-fun _text_node(value: String) -> Node {
-    let attrs: List<Attribute> = []
-    let kids: List<Node> = []
-    let binds: List<NodeBind> = []
-    let warnings: List<String> = []
-    return Node { tag: "", value, attrs, kids, binds, mark: -1, dropped: false, warnings }
+fun _text_node(value: str) -> Node {
+    let attrs: list[Attribute] = []
+    let kids: list[Node] = []
+    let binds: list[NodeBind] = []
+    let warnings: list[str] = []
+    return Node(
+        tag: "",
+        value: value,
+        attrs: attrs,
+        kids: kids,
+        binds: binds,
+        mark: -1,
+        dropped: false,
+        warnings: warnings,
+    )
 }
 
-fun _quote_word(value: String) -> String {
+fun _quote_word(value: str) -> str {
     return _quote().concat(value).concat(_quote())
 }
 
 // The tag as a warning names it: "<div>" for an element, "a text node" or "a
 // fragment" for the tagless kinds, so a message always says where it happened.
-fun _describe_node(node: Node) -> String {
+fun _describe_node(node: Node) -> str {
     if node.tag == "" {
         if node.value == "" {
             return "a fragment"
@@ -418,27 +445,27 @@ fun _describe_node(node: Node) -> String {
     return "<".concat(node.tag).concat(">")
 }
 
-fun _quote() -> String {
+fun _quote() -> str {
     return stringify(JsonValue.Str("")).substring(0, 1)
 }
 
-fun _escape_html(value: String) -> String {
+fun _escape_html(value: str) -> str {
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
         _quote(),
         "&quot;",
     ).replace("'", "&#39;")
 }
 
-fun _ascii_letter(b: Int) -> Bool {
-    return (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+fun _ascii_letter(b: int) -> bool {
+    return (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
 }
 
 // Letters, digits, hyphen, underscore: the character set of tag, attribute,
 // and meta names. Underscore is legal in attribute and meta-property names
 // (og:site_name, article:published_time) and carries no execution risk; the
 // executable checks are by name, not by character.
-fun _name_char(b: Int) -> Bool {
-    return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 45 || b == 95
+fun _name_char(b: int) -> bool {
+    return _ascii_letter(b) or (b >= 48 and b <= 57) or b == 45 or b == 95
 }
 
 // Elements that run code or hand the page to someone else. raven-web owns the
@@ -448,47 +475,47 @@ fun _name_char(b: Int) -> Bool {
 // that execute on their own. Head metadata and styles are Page's job (`Page`
 // emits its own meta/link, and `Stylesheet` carries CSS), so nothing legitimate
 // needs them here.
-fun _dangerous_tag(tag: String) -> Bool {
-    return tag == "script" || tag == "base" || tag == "meta" || tag == "link" || tag == "style" || tag == "iframe" || tag == "frame" || tag == "frameset" || tag == "object" || tag == "embed" || tag == "applet" || tag == "portal" || tag == "noembed" || tag == "noscript"
+fun _dangerous_tag(tag: str) -> bool {
+    return tag == "script" or tag == "base" or tag == "meta" or tag == "link" or tag == "style" or tag == "iframe" or tag == "frame" or tag == "frameset" or tag == "object" or tag == "embed" or tag == "applet" or tag == "portal" or tag == "noembed" or tag == "noscript"
 }
 
-fun _valid_tag(tag: String) -> Bool {
-    if tag.length() == 0 || !_ascii_letter(tag.byte_at(0)) {
+fun _valid_tag(tag: str) -> bool {
+    if tag.length() == 0 or not _ascii_letter(tag.byte_at(0)) {
         return false
     }
-    let i = 1
+    var i = 1
     while i < tag.length() {
-        if !_name_char(tag.byte_at(i)) {
+        if not _name_char(tag.byte_at(i)) {
             return false
         }
         i += 1
     }
-    return !_dangerous_tag(tag.to_lower())
+    return not _dangerous_tag(tag.to_lower())
 }
 
 // Attributes whose value is a URL the browser will follow. The typed builders
 // (link, image, href, src) already check these; this is what makes the raw
 // attr() escape hatch check them too.
-fun _url_attr(name: String) -> Bool {
-    return name == "href" || name == "src" || name == "action" || name == "formaction" || name == "xlink:href" || name == "data" || name == "poster" || name == "cite" || name == "ping" || name == "manifest" || name == "longdesc" || name == "background"
+fun _url_attr(name: str) -> bool {
+    return name == "href" or name == "src" or name == "action" or name == "formaction" or name == "xlink:href" or name == "data" or name == "poster" or name == "cite" or name == "ping" or name == "manifest" or name == "longdesc" or name == "background"
 }
 
 // Attributes that inject markup or behaviour rather than naming a URL, so there
 // is no safe value to allow.
-fun _executable_attr(name: String) -> Bool {
-    return name.starts_with("on") || name == "style" || name == "srcdoc" || name == "http-equiv"
+fun _executable_attr(name: str) -> bool {
+    return name.starts_with("on") or name == "style" or name == "srcdoc" or name == "http-equiv"
 }
 
 // A DOM key name: letters and digits only ("Escape", "Enter", "ArrowDown",
 // "a", "Space"). Long enough for every named key, short enough to be a name.
-fun _valid_key_name(value: String) -> Bool {
-    if value.length() == 0 || value.length() > 20 {
+fun _valid_key_name(value: str) -> bool {
+    if value.length() == 0 or value.length() > 20 {
         return false
     }
-    let i = 0
+    var i = 0
     while i < value.length() {
         let b = value.byte_at(i)
-        if !_ascii_letter(b) && !(b >= 48 && b <= 57) {
+        if not _ascii_letter(b) and not (b >= 48 and b <= 57) {
             return false
         }
         i += 1
@@ -496,23 +523,23 @@ fun _valid_key_name(value: String) -> Bool {
     return true
 }
 
-fun _valid_attr_name(name: String) -> Bool {
-    if name.length() == 0 || !_ascii_letter(name.byte_at(0)) {
+fun _valid_attr_name(name: str) -> bool {
+    if name.length() == 0 or not _ascii_letter(name.byte_at(0)) {
         return false
     }
-    let i = 1
+    var i = 1
     while i < name.length() {
         let b = name.byte_at(i)
-        if !_name_char(b) && b != 58 {
+        if not _name_char(b) and b != 58 {
             return false
         }
         i += 1
     }
-    return !_executable_attr(name.to_lower())
+    return not _executable_attr(name.to_lower())
 }
 
-fun _void_tag(tag: String) -> Bool {
-    return tag == "area" || tag == "base" || tag == "br" || tag == "col" || tag == "embed" || tag == "hr" || tag == "img" || tag == "input" || tag == "link" || tag == "meta" || tag == "param" || tag == "source" || tag == "track" || tag == "wbr"
+fun _void_tag(tag: str) -> bool {
+    return tag == "area" or tag == "base" or tag == "br" or tag == "col" or tag == "embed" or tag == "hr" or tag == "img" or tag == "input" or tag == "link" or tag == "meta" or tag == "param" or tag == "source" or tag == "track" or tag == "wbr"
 }
 
 // A DOM event an element can react to. The name maps to the delegated event the
@@ -533,19 +560,19 @@ enum Event {
 }
 
 impl Event {
-    fun name(self) -> String {
+    fun name(self) -> str {
         return match self {
-            Click -> "click",
-            Input -> "input",
-            Change -> "change",
-            Submit -> "submit",
-            KeyDown -> "keydown",
-            KeyUp -> "keyup",
-            Focus -> "focusin",
-            Blur -> "focusout",
-            MouseEnter -> "mouseover",
-            MouseLeave -> "mouseout",
-            Scroll -> "scroll",
+            case Click { "click" }
+            case Input { "input" }
+            case Change { "change" }
+            case Submit { "submit" }
+            case KeyDown { "keydown" }
+            case KeyUp { "keyup" }
+            case Focus { "focusin" }
+            case Blur { "focusout" }
+            case MouseEnter { "mouseover" }
+            case MouseLeave { "mouseout" }
+            case Scroll { "scroll" }
         }
     }
 }
@@ -554,8 +581,8 @@ impl Node {
     // Infallible: an invalid tag yields a fragment (its children still render,
     // the element wrapper is dropped), matching how attr and href silently
     // reject unsafe input. Use try_new to detect an invalid tag.
-    fun new(tag: String) -> Node {
-        if !_valid_tag(tag) {
+    fun new(tag: str) -> Node {
+        if not _valid_tag(tag) {
             return _dropped_node(
                 "dropped element ".concat(_quote_word(tag)).concat(
                     ": invalid or unsafe tag name; the element and its subtree render as nothing",
@@ -565,14 +592,14 @@ impl Node {
         return _node(tag.to_lower())
     }
 
-    fun try_new(tag: String) -> Result<Node, String> {
-        if !_valid_tag(tag) {
+    fun try_new(tag: str) -> Result[Node, str] {
+        if not _valid_tag(tag) {
             return Err("invalid HTML tag")
         }
         return Ok(_node(tag.to_lower()))
     }
 
-    fun text(value: String) -> Node {
+    fun text(value: str) -> Node {
         return _text_node(value)
     }
 
@@ -696,19 +723,19 @@ impl Node {
         return _node("li")
     }
 
-    fun button(label: String) -> Node {
+    fun button(label: str) -> Node {
         return _node("button").attr("type", "button").child_text(label)
     }
 
-    fun submit_button(label: String) -> Node {
+    fun submit_button(label: str) -> Node {
         return _node("button").attr("type", "submit").child_text(label)
     }
 
-    fun input_field(placeholder: String) -> Node {
+    fun input_field(placeholder: str) -> Node {
         return _node("input").attr("type", "text").attr("placeholder", placeholder)
     }
 
-    fun textarea(placeholder: String) -> Node {
+    fun textarea(placeholder: str) -> Node {
         return _node("textarea").attr("placeholder", placeholder)
     }
 
@@ -720,17 +747,17 @@ impl Node {
         return _node("select")
     }
 
-    fun option(label: String, value: String) -> Node {
+    fun option(label: str, value: str) -> Node {
         return _node("option").attr("value", value).child_text(label)
     }
 
-    fun link(label: String, url: String) -> Node {
+    fun link(label: str, url: str) -> Node {
         return _node("a").href(url).child_text(label)
     }
 
     // Images are lazy and async by default, the class norm; a hero image
     // should call eager() to opt out and take fetch priority instead.
-    fun image(url: String, alt: String) -> Node {
+    fun image(url: str, alt: str) -> Node {
         return _node("img").src(url).attr("alt", alt).attr("loading", "lazy").attr(
             "decoding",
             "async",
@@ -739,9 +766,9 @@ impl Node {
 
     // image with intrinsic dimensions, which is what prevents layout shift:
     // the browser reserves the box before the file arrives.
-    fun image_sized(url: String, alt: String, width: Int, height: Int) -> Node {
+    fun image_sized(url: str, alt: str, width: int, height: int) -> Node {
         let out = Node.image(url, alt)
-        if width > 0 && height > 0 {
+        if width > 0 and height > 0 {
             return out.attr("width", width.to_string()).attr("height", height.to_string())
         }
         out.warnings.push(
@@ -818,34 +845,34 @@ impl Node {
         return _node("legend")
     }
 
-    fun optgroup(label: String) -> Node {
+    fun optgroup(label: str) -> Node {
         return _node("optgroup").attr("label", label)
     }
 
-    fun radio(name: String, value: String) -> Node {
+    fun radio(name: str, value: str) -> Node {
         return _node("input").attr("type", "radio").attr("name", name).attr("value", value)
     }
 
-    fun number_field(placeholder: String) -> Node {
+    fun number_field(placeholder: str) -> Node {
         return _node("input").attr("type", "number").attr("placeholder", placeholder)
     }
 
-    fun email_field(placeholder: String) -> Node {
+    fun email_field(placeholder: str) -> Node {
         return _node("input").attr("type", "email").attr("placeholder", placeholder)
     }
 
-    fun password_field(placeholder: String) -> Node {
+    fun password_field(placeholder: str) -> Node {
         return _node("input").attr("type", "password").attr("placeholder", placeholder)
     }
 
-    fun search_field(placeholder: String) -> Node {
+    fun search_field(placeholder: str) -> Node {
         return _node("input").attr("type", "search").attr("placeholder", placeholder)
     }
 
     // A fragment whose child is `node` only when `cond` holds, otherwise an
     // empty fragment that renders nothing. Lets a component include optional
     // structure inline without an if expression around the whole tree.
-    fun when(cond: Bool, node: Node) -> Node {
+    fun when(cond: bool, node: Node) -> Node {
         if cond {
             return _node("").child(node)
         }
@@ -855,7 +882,7 @@ impl Node {
     // A fragment of `build(item)` for each item, in order. The mapper is an
     // ordinary Raven closure, so components stay declarative instead of
     // building an intermediate list with a manual loop.
-    fun each<T>(items: List<T>, build: fun(T) -> Node) -> Node {
+    fun each[T](items: list[T], build: fun(T) -> Node) -> Node {
         let out = _node("")
         for item in items {
             out.kids.push(build(item))
@@ -872,8 +899,8 @@ impl Node {
     // no-op. `class` accumulates, which is what a caller adding a class to a
     // component's own markup means; every other attribute is replaced, so the
     // last write wins.
-    fun attr(self, name: String, value: String) -> Node {
-        if !_valid_attr_name(name) {
+    fun attr(self, name: str, value: str) -> Node {
+        if not _valid_attr_name(name) {
             self.warnings.push(
                 "dropped attribute ".concat(_quote_word(name)).concat(" on ").concat(_describe_node(self)).concat(
                     ": invalid or executable attribute name",
@@ -885,7 +912,7 @@ impl Node {
         // like one set through link() or image(); otherwise attr("href",
         // "javascript:...") would walk straight past the safety the typed
         // builders provide.
-        if _url_attr(name.to_lower()) && !_safe_url(value) {
+        if _url_attr(name.to_lower()) and not _safe_url(value) {
             self.warnings.push(
                 "dropped attribute ".concat(_quote_word(name)).concat(" on ").concat(_describe_node(self)).concat(
                     ": unsafe URL ",
@@ -903,27 +930,27 @@ impl Node {
                 return self
             }
         }
-        self.attrs.push(Attribute { name, value })
+        self.attrs.push(Attribute(name: name, value: value))
         return self
     }
 
-    fun id(self, value: String) -> Node {
+    fun id(self, value: str) -> Node {
         return self.attr("id", value)
     }
 
-    fun class_name(self, value: String) -> Node {
+    fun class_name(self, value: str) -> Node {
         return self.attr("class", value)
     }
 
-    fun title(self, value: String) -> Node {
+    fun title(self, value: str) -> Node {
         return self.attr("title", value)
     }
 
     // A link that navigates a Router without reloading. It keeps a real href, so
     // it still opens in a new tab, middle-clicks, and is crawlable; only a plain
     // click is intercepted.
-    fun route_link(text: String, path: String) -> Node {
-        if !_valid_route_pattern(path) {
+    fun route_link(text: str, path: str) -> Node {
+        if not _valid_route_pattern(path) {
             let out = Node.fragment()
             out.warnings.push(
                 "dropped route_link ".concat(_quote_word(text)).concat(": invalid route path ").concat(
@@ -936,27 +963,27 @@ impl Node {
         return Node.link(text, clean).attr("data-rw-link", clean)
     }
 
-    fun name(self, value: String) -> Node {
+    fun name(self, value: str) -> Node {
         return self.attr("name", value)
     }
 
-    fun value(self, value: String) -> Node {
+    fun value(self, value: str) -> Node {
         return self.attr("value", value)
     }
 
-    fun placeholder(self, value: String) -> Node {
+    fun placeholder(self, value: str) -> Node {
         return self.attr("placeholder", value)
     }
 
-    fun data(self, name: String, value: String) -> Node {
+    fun data(self, name: str, value: str) -> Node {
         return self.attr("data-".concat(name), value)
     }
 
-    fun aria(self, name: String, value: String) -> Node {
+    fun aria(self, name: str, value: str) -> Node {
         return self.attr("aria-".concat(name), value)
     }
 
-    fun disabled(self, value: Bool) -> Node {
+    fun disabled(self, value: bool) -> Node {
         if value {
             return self.attr("disabled", "disabled")
         }
@@ -996,8 +1023,8 @@ impl Node {
     // A keydown that only fires for one key: on_key("Escape", close). Key
     // names are the DOM's (Escape, Enter, ArrowDown, a); "Space" is accepted
     // for the space bar.
-    fun on_key(self, key: String, behavior: Behavior) -> Node {
-        if !_valid_key_name(key) {
+    fun on_key(self, key: str, behavior: Behavior) -> Node {
+        if not _valid_key_name(key) {
             self.warnings.push(
                 "dropped on_key on ".concat(_describe_node(self)).concat(": invalid key name ").concat(
                     _quote_word(key),
@@ -1034,7 +1061,7 @@ impl Node {
         return self
     }
 
-    fun children(self, nodes: List<Node>) -> Node {
+    fun children(self, nodes: list[Node]) -> Node {
         for node in nodes {
             self.kids.push(node)
         }
@@ -1043,7 +1070,7 @@ impl Node {
 
     // Append `node` only when `cond` holds. Keeps optional children inline in a
     // build chain instead of splitting the tree around an if expression.
-    fun child_when(self, cond: Bool, node: Node) -> Node {
+    fun child_when(self, cond: bool, node: Node) -> Node {
         if cond {
             self.kids.push(node)
         }
@@ -1051,15 +1078,15 @@ impl Node {
     }
 
     // Append `build(item)` for each item, in order. Replaces the common
-    // pattern of building a List<Node> with a manual loop before `.children`.
-    fun child_each<T>(self, items: List<T>, build: fun(T) -> Node) -> Node {
+    // pattern of building a list[Node] with a manual loop before `.children`.
+    fun child_each[T](self, items: list[T], build: fun(T) -> Node) -> Node {
         for item in items {
             self.kids.push(build(item))
         }
         return self
     }
 
-    fun child_text(self, value: String) -> Node {
+    fun child_text(self, value: str) -> Node {
         self.kids.push(Node.text(value))
         return self
     }
@@ -1071,8 +1098,8 @@ impl Node {
 
     // Add one candidate to the srcset: srcset_add(url, 640) appends
     // "url 640w". Call once per variant, then set sizes().
-    fun srcset_add(self, url: String, width: Int) -> Node {
-        if !_safe_url(url) {
+    fun srcset_add(self, url: str, width: int) -> Node {
+        if not _safe_url(url) {
             self.warnings.push(
                 "dropped srcset candidate on ".concat(_describe_node(self)).concat(": unsafe URL ").concat(
                     _quote_word(url),
@@ -1098,11 +1125,11 @@ impl Node {
         return self.attr("srcset", entry)
     }
 
-    fun sizes(self, value: String) -> Node {
+    fun sizes(self, value: str) -> Node {
         return self.attr("sizes", value)
     }
 
-    fun href(self, url: String) -> Node {
+    fun href(self, url: str) -> Node {
         if _safe_url(url) {
             return self.attr("href", url)
         }
@@ -1114,7 +1141,7 @@ impl Node {
         return self
     }
 
-    fun src(self, url: String) -> Node {
+    fun src(self, url: str) -> Node {
         if _safe_url(url) {
             return self.attr("src", url)
         }
@@ -1155,7 +1182,7 @@ impl Node {
         return self.attr("data-rw-model", source.key)
     }
 
-    fun try_bind_value(self, source: Signal) -> Result<Node, String> {
+    fun try_bind_value(self, source: Signal) -> Result[Node, str] {
         if source.key != source.path {
             return Err("cannot model a field path: ".concat(source.path))
         }
@@ -1169,7 +1196,7 @@ impl Node {
         return self
     }
 
-    fun class_of(self, source: Signal, class_name: String) -> Node {
+    fun class_of(self, source: Signal, class_name: str) -> Node {
         if _valid_class_token(class_name) {
             self.binds.push(_node_bind("class", source.path, class_name))
         } else {
@@ -1182,7 +1209,7 @@ impl Node {
         return self
     }
 
-    fun attr_of(self, source: Signal, name: String) -> Node {
+    fun attr_of(self, source: Signal, name: str) -> Node {
         if _valid_attr_name(name) {
             self.binds.push(_node_bind("attr", source.path, name))
         } else {
@@ -1232,7 +1259,7 @@ impl Node {
         return self
     }
 
-    fun class_when(self, cond: Expr, class_name: String) -> Node {
+    fun class_when(self, cond: Expr, class_name: str) -> Node {
         if _valid_class_token(class_name) {
             self.binds.push(_node_bind_expr("class", cond, class_name))
         } else {
@@ -1245,7 +1272,7 @@ impl Node {
         return self
     }
 
-    fun attr_expr(self, value: Expr, name: String) -> Node {
+    fun attr_expr(self, value: Expr, name: str) -> Node {
         if _valid_attr_name(name) {
             self.binds.push(_node_bind_expr("attr", value, name))
         } else {
@@ -1266,16 +1293,16 @@ impl Node {
     // attr_of(open, "aria-expanded") writes aria-expanded="1", which is invalid
     // and leaves the control announcing as collapsed forever. Nothing errors,
     // which is what makes it worth its own method.
-    fun aria_if(self, source: Signal, name: String) -> Node {
+    fun aria_if(self, source: Signal, name: str) -> Node {
         return self.aria_bind(_node_bind("aria", source.path, "aria-".concat(name)), name)
     }
 
     // The same, computed: aria_when(Expr.not(Expr.of(valid)), "invalid").
-    fun aria_when(self, cond: Expr, name: String) -> Node {
+    fun aria_when(self, cond: Expr, name: str) -> Node {
         return self.aria_bind(_node_bind_expr("aria", cond, "aria-".concat(name)), name)
     }
 
-    fun aria_bind(self, bind: NodeBind, name: String) -> Node {
+    fun aria_bind(self, bind: NodeBind, name: str) -> Node {
         if _valid_attr_name("aria-".concat(name)) {
             self.binds.push(bind)
         } else {
@@ -1298,24 +1325,24 @@ impl Node {
     }
 
     // each_of, but only items whose `field` equals `value` (board columns).
-    fun each_where(self, source: Signal, template: Node, field: String, value: String) -> Node {
+    fun each_where(self, source: Signal, template: Node, field: str, value: str) -> Node {
         _collect_warnings(template, self.warnings)
-        let dep_keys: List<String> = [_root_key(source.path)]
+        let dep_keys: list[str] = [_root_key(source.path)]
         self.binds.push(
-            NodeBind {
+            NodeBind(
                 kind: "list",
                 path: source.path,
                 arg: template.render(),
                 filter_field: field,
                 filter_value: value,
                 expr: "",
-                dep_keys,
-            },
+                dep_keys: dep_keys,
+            ),
         )
         return self
     }
 
-    fun render(self) -> String {
+    fun render(self) -> str {
         return _render_node(self)
     }
 }
@@ -1324,12 +1351,12 @@ impl Node {
 // "java\tscript:x" navigates like "javascript:x". Strip them before deciding
 // what a URL says. The stripped form is only used to judge; what gets emitted
 // is the author's original value.
-fun _strip_url_noise(value: String) -> String {
-    let out = ""
-    let i = 0
+fun _strip_url_noise(value: str) -> str {
+    var out = ""
+    var i = 0
     while i < value.length() {
         let b = value.byte_at(i)
-        if b > 32 && b != 127 {
+        if b > 32 and b != 127 {
             out = out.concat(value.substring(i, i + 1))
         }
         i += 1
@@ -1339,18 +1366,18 @@ fun _strip_url_noise(value: String) -> String {
 
 // True when the value begins with a URL scheme (^[a-z][a-z0-9+-.]*:). A path
 // like "a/b:c" is not a scheme, because the slash ends the run first.
-fun _has_scheme(value: String) -> Bool {
-    if value.length() == 0 || !_ascii_letter(value.byte_at(0)) {
+fun _has_scheme(value: str) -> bool {
+    if value.length() == 0 or not _ascii_letter(value.byte_at(0)) {
         return false
     }
-    let i = 1
+    var i = 1
     while i < value.length() {
         let b = value.byte_at(i)
         if b == 58 {
             return true
         }
-        let scheme_char = _ascii_letter(b) || (b >= 48 && b <= 57) || b == 43 || b == 45 || b == 46
-        if !scheme_char {
+        let scheme_char = _ascii_letter(b) or (b >= 48 and b <= 57) or b == 43 or b == 45 or b == 46
+        if not scheme_char {
             return false
         }
         i += 1
@@ -1363,21 +1390,21 @@ fun _has_scheme(value: String) -> Bool {
 // Judging by scheme rather than by a prefix allowlist means an ordinary
 // relative path like "rows.json" works, while javascript:, vbscript:, and
 // data: stay rejected however they are spelled.
-fun _safe_url(url: String) -> Bool {
+fun _safe_url(url: str) -> bool {
     let cleaned = _strip_url_noise(url)
     if cleaned.length() == 0 {
         return false
     }
-    if !_has_scheme(cleaned) {
+    if not _has_scheme(cleaned) {
         return true
     }
-    return cleaned.starts_with("http://") || cleaned.starts_with("https://") || cleaned.starts_with(
+    return cleaned.starts_with("http://") or cleaned.starts_with("https://") or cleaned.starts_with(
         "mailto:",
-    ) || cleaned.starts_with("tel:")
+    ) or cleaned.starts_with("tel:")
 }
 
-fun _render_attrs(attrs: List<Attribute>) -> String {
-    let out = ""
+fun _render_attrs(attrs: list[Attribute]) -> str {
+    var out = ""
     let q = _quote()
     for attr in attrs {
         out = out.concat(" ").concat(attr.name).concat("=").concat(q)
@@ -1386,7 +1413,7 @@ fun _render_attrs(attrs: List<Attribute>) -> String {
     return out
 }
 
-fun _render_node(node: Node) -> String {
+fun _render_node(node: Node) -> str {
     if node.dropped {
         return ""
     }
@@ -1394,13 +1421,13 @@ fun _render_node(node: Node) -> String {
         if node.value != "" {
             return _escape_html(node.value)
         }
-        let fragment_out = ""
+        var fragment_out = ""
         for kid in node.kids {
             fragment_out = fragment_out.concat(_render_node(kid))
         }
         return fragment_out
     }
-    let out = "<".concat(node.tag).concat(_render_attrs(node.attrs)).concat(">")
+    var out = "<".concat(node.tag).concat(_render_attrs(node.attrs)).concat(">")
     if _void_tag(node.tag) {
         return out
     }
@@ -1420,32 +1447,32 @@ impl Component for Node {
     }
 }
 
-struct CssDeclaration {
-    property: String,
-    value: String,
+class CssDeclaration {
+    property: str
+    value: str
 }
 
-struct CssRule {
-    selector: String,
-    declarations: List<CssDeclaration>,
+class CssRule {
+    selector: str
+    declarations: list[CssDeclaration]
     // Dropped inputs, merged into the Stylesheet this rule is added to.
-    warnings: List<String>,
+    warnings: list[str]
 }
 
-struct Stylesheet {
-    rules: List<CssRule>,
-    raw_blocks: List<String>,
+class Stylesheet {
+    rules: list[CssRule]
+    raw_blocks: list[str]
     // Dropped inputs, collected by Page.warnings() through with_styles.
-    warnings: List<String>,
+    warnings: list[str]
 }
 
 // Append the classes of `extra` that `current` does not already carry, so
 // repeated class_name calls compose instead of colliding.
-fun _merge_classes(current: String, extra: String) -> String {
-    let out = current.trim()
+fun _merge_classes(current: str, extra: str) -> str {
+    var out = current.trim()
     for token in extra.split(" ") {
         let clean = token.trim()
-        if clean.length() > 0 && !_has_class(out, clean) {
+        if clean.length() > 0 and not _has_class(out, clean) {
             if out.length() == 0 {
                 out = clean
             } else {
@@ -1457,7 +1484,7 @@ fun _merge_classes(current: String, extra: String) -> String {
 }
 
 // Whole-token membership: "btn" must not match inside "btn-primary".
-fun _has_class(list: String, token: String) -> Bool {
+fun _has_class(list: str, token: str) -> bool {
     for existing in list.split(" ") {
         if existing == token {
             return true
@@ -1466,27 +1493,27 @@ fun _has_class(list: String, token: String) -> Bool {
     return false
 }
 
-fun _css_safe_text(value: String) -> Bool {
+fun _css_safe_text(value: str) -> bool {
     let lower = value.to_lower()
-    if value.contains("{") || value.contains("}") || value.contains("<") || value.contains(">") || value.contains(
+    if value.contains("{") or value.contains("}") or value.contains("<") or value.contains(">") or value.contains(
         ";",
     ) {
         return false
     }
-    if value.contains("/*") || value.contains("*/") {
+    if value.contains("/*") or value.contains("*/") {
         return false
     }
-    if lower.contains("javascript:") || lower.contains("expression(") {
+    if lower.contains("javascript:") or lower.contains("expression(") {
         return false
     }
     return value.length() > 0
 }
 
-fun _valid_css_property(property: String) -> Bool {
+fun _valid_css_property(property: str) -> bool {
     if property.length() == 0 {
         return false
     }
-    let i = 0
+    var i = 0
     if property.starts_with("--") {
         i = 2
     }
@@ -1495,7 +1522,7 @@ fun _valid_css_property(property: String) -> Bool {
     }
     while i < property.length() {
         let b = property.byte_at(i)
-        if !_ascii_letter(b) && !(b >= 48 && b <= 57) && b != 45 {
+        if not _ascii_letter(b) and not (b >= 48 and b <= 57) and b != 45 {
             return false
         }
         i += 1
@@ -1506,49 +1533,47 @@ fun _valid_css_property(property: String) -> Bool {
 impl CssRule {
     // Infallible: an invalid selector yields a rule with an empty selector that
     // renders nothing and is skipped by Stylesheet. Use try_new to detect it.
-    fun new(selector: String) -> CssRule {
-        let declarations: List<CssDeclaration> = []
-        if !_css_safe_text(selector) {
-            let warnings: List<String> = [
-                "dropped CSS rule: invalid selector ".concat(_quote_word(selector)),
-            ]
-            return CssRule { selector: "", declarations, warnings }
+    fun new(selector: str) -> CssRule {
+        let declarations: list[CssDeclaration] = []
+        if not _css_safe_text(selector) {
+            let warnings: list[str] = ["dropped CSS rule: invalid selector ".concat(_quote_word(selector))]
+            return CssRule(selector: "", declarations: declarations, warnings: warnings)
         }
-        let warnings: List<String> = []
-        return CssRule { selector, declarations, warnings }
+        let warnings: list[str] = []
+        return CssRule(selector: selector, declarations: declarations, warnings: warnings)
     }
 
-    fun try_new(selector: String) -> Result<CssRule, String> {
-        if !_css_safe_text(selector) {
+    fun try_new(selector: str) -> Result[CssRule, str] {
+        if not _css_safe_text(selector) {
             return Err("invalid CSS selector")
         }
-        let declarations: List<CssDeclaration> = []
-        let warnings: List<String> = []
-        return Ok(CssRule { selector, declarations, warnings })
+        let declarations: list[CssDeclaration] = []
+        let warnings: list[str] = []
+        return Ok(CssRule(selector: selector, declarations: declarations, warnings: warnings))
     }
 
-    fun class_name(name: String) -> CssRule {
+    fun class_name(name: str) -> CssRule {
         return CssRule.new(".".concat(name))
     }
 
-    fun try_class_name(name: String) -> Result<CssRule, String> {
+    fun try_class_name(name: str) -> Result[CssRule, str] {
         return CssRule.try_new(".".concat(name))
     }
 
-    fun id(name: String) -> CssRule {
+    fun id(name: str) -> CssRule {
         return CssRule.new("#".concat(name))
     }
 
-    fun try_id(name: String) -> Result<CssRule, String> {
+    fun try_id(name: str) -> Result[CssRule, str] {
         return CssRule.try_new("#".concat(name))
     }
 
-    fun set(self, property: String, value: String) -> CssRule {
-        if !_valid_css_property(property) {
+    fun set(self, property: str, value: str) -> CssRule {
+        if not _valid_css_property(property) {
             self.warnings.push("dropped CSS declaration: invalid property ".concat(_quote_word(property)))
             return self
         }
-        if !_css_safe_text(value) {
+        if not _css_safe_text(value) {
             self.warnings.push(
                 "dropped CSS declaration ".concat(_quote_word(property)).concat(": invalid value ").concat(
                     _quote_word(value),
@@ -1556,26 +1581,26 @@ impl CssRule {
             )
             return self
         }
-        self.declarations.push(CssDeclaration { property, value })
+        self.declarations.push(CssDeclaration(property: property, value: value))
         return self
     }
 
-    fun try_set(self, property: String, value: String) -> Result<CssRule, String> {
-        if !_valid_css_property(property) {
+    fun try_set(self, property: str, value: str) -> Result[CssRule, str] {
+        if not _valid_css_property(property) {
             return Err("invalid CSS property")
         }
-        if !_css_safe_text(value) {
+        if not _css_safe_text(value) {
             return Err("invalid CSS value")
         }
-        self.declarations.push(CssDeclaration { property, value })
+        self.declarations.push(CssDeclaration(property: property, value: value))
         return Ok(self)
     }
 
-    fun render(self) -> String {
+    fun render(self) -> str {
         if self.selector == "" {
             return ""
         }
-        let out = self.selector.concat(" {")
+        var out = self.selector.concat(" {")
         for declaration in self.declarations {
             out = out.concat(" ").concat(declaration.property).concat(": ").concat(declaration.value).concat(
                 ";",
@@ -1587,10 +1612,10 @@ impl CssRule {
 
 impl Stylesheet {
     fun new() -> Stylesheet {
-        let rules: List<CssRule> = []
-        let raw_blocks: List<String> = []
-        let warnings: List<String> = []
-        return Stylesheet { rules, raw_blocks, warnings }
+        let rules: list[CssRule] = []
+        let raw_blocks: list[str] = []
+        let warnings: list[str] = []
+        return Stylesheet(rules: rules, raw_blocks: raw_blocks, warnings: warnings)
     }
 
     fun add(self, rule: CssRule) -> Stylesheet {
@@ -1600,8 +1625,8 @@ impl Stylesheet {
 
     // Every dropped input in the sheet and its rules. Read at collection time,
     // so a declaration dropped after add() is still seen.
-    fun all_warnings(self) -> List<String> {
-        let out: List<String> = []
+    fun all_warnings(self) -> list[str] {
+        let out: list[str] = []
         for warning in self.warnings {
             out.push(warning)
         }
@@ -1614,13 +1639,13 @@ impl Stylesheet {
     }
 
     // Raw CSS is an explicit build-time escape hatch for authored CSS.
-    fun raw(self, css: String) -> Stylesheet {
+    fun raw(self, css: str) -> Stylesheet {
         self.raw_blocks.push(css)
         return self
     }
 
-    fun render(self) -> String {
-        let out = ""
+    fun render(self) -> str {
+        var out = ""
         for rule in self.rules {
             let rendered = rule.render()
             if rendered != "" {
@@ -1629,7 +1654,7 @@ impl Stylesheet {
         }
         for raw in self.raw_blocks {
             out = out.concat(raw)
-            if !raw.ends_with("\n") {
+            if not raw.ends_with("\n") {
                 out = out.concat("\n")
             }
         }
@@ -1637,157 +1662,157 @@ impl Stylesheet {
     }
 }
 
-struct StaticFile {
-    path: String,
-    contents: String,
+class StaticFile {
+    path: str
+    contents: str
 }
 
-fun _valid_static_path(path: String) -> Bool {
+fun _valid_static_path(path: str) -> bool {
     let clean = path.trim()
-    if clean.length() == 0 || clean.starts_with("/") {
+    if clean.length() == 0 or clean.starts_with("/") {
         return false
     }
     let parts = clean.split("/")
     for part in parts {
-        if part.length() == 0 || part == "." || part == ".." {
+        if part.length() == 0 or part == "." or part == ".." {
             return false
         }
-        let i = 0
+        var i = 0
         while i < part.length() {
             let b = part.byte_at(i)
-            if b < 32 || b == 34 || b == 58 || b == 60 || b == 62 || b == 92 {
+            if b < 32 or b == 34 or b == 58 or b == 60 or b == 62 or b == 92 {
                 return false
             }
             i += 1
         }
     }
     let lower = clean.to_lower()
-    return lower != "index.html" && lower != "styles.css" && lower != "app.js"
+    return lower != "index.html" and lower != "styles.css" and lower != "app.js"
 }
 
-fun _valid_css_file_path(path: String) -> Bool {
-    return _valid_static_path(path) && path.to_lower().ends_with(".css")
+fun _valid_css_file_path(path: str) -> bool {
+    return _valid_static_path(path) and path.to_lower().ends_with(".css")
 }
 
-fun _asset_href(path: String) -> String {
+fun _asset_href(path: str) -> str {
     return "./".concat(path)
 }
 
 impl StaticFile {
     // Infallible: an invalid path yields a file with an empty path, which Page
     // and write_static skip. Use try_new to detect an invalid path.
-    fun new(path: String, contents: String) -> StaticFile {
+    fun new(path: str, contents: str) -> StaticFile {
         let clean = path.trim()
-        if !_valid_static_path(clean) {
-            return StaticFile { path: "", contents }
+        if not _valid_static_path(clean) {
+            return StaticFile(path: "", contents: contents)
         }
-        return StaticFile { path: clean, contents }
+        return StaticFile(path: clean, contents: contents)
     }
 
-    fun try_new(path: String, contents: String) -> Result<StaticFile, String> {
+    fun try_new(path: str, contents: str) -> Result[StaticFile, str] {
         let clean = path.trim()
-        if !_valid_static_path(clean) {
+        if not _valid_static_path(clean) {
             return Err("invalid static file path")
         }
-        return Ok(StaticFile { path: clean, contents })
+        return Ok(StaticFile(path: clean, contents: contents))
     }
 
-    fun css(path: String, contents: String) -> StaticFile {
+    fun css(path: str, contents: str) -> StaticFile {
         let clean = path.trim()
-        if !_valid_css_file_path(clean) {
-            return StaticFile { path: "", contents }
+        if not _valid_css_file_path(clean) {
+            return StaticFile(path: "", contents: contents)
         }
-        return StaticFile { path: clean, contents }
+        return StaticFile(path: clean, contents: contents)
     }
 
-    fun try_css(path: String, contents: String) -> Result<StaticFile, String> {
+    fun try_css(path: str, contents: str) -> Result[StaticFile, str] {
         let clean = path.trim()
-        if !_valid_css_file_path(clean) {
+        if not _valid_css_file_path(clean) {
             return Err("CSS file paths must be safe relative .css paths")
         }
-        return Ok(StaticFile { path: clean, contents })
+        return Ok(StaticFile(path: clean, contents: contents))
     }
 }
 
 // One field of a JSON request body. When `selector` is set the value is read
 // from that input at send time; otherwise the constant `literal` is sent.
-struct BodyField {
-    name: String,
-    selector: String,
-    literal: String,
+class BodyField {
+    name: str
+    selector: str
+    literal: str
 }
 
 // A typed HTTP request. The author never writes fetch code: raven-web emits it.
 // `auth_state` names a state key whose value is sent as a Bearer token.
 // `into_state` names a state key to receive the decoded JSON response.
-struct FetchSpec {
-    method: String,
-    url: String,
-    body_fields: List<BodyField>,
-    auth_state: String,
-    into_state: String,
-    then: List<Effect>,
-    on_error: List<Effect>,
+class FetchSpec {
+    method: str
+    url: str
+    body_fields: list[BodyField]
+    auth_state: str
+    into_state: str
+    then: list[Effect]
+    on_error: list[Effect]
     // Dropped inputs, merged into the Behavior that sends this request.
-    warnings: List<String>,
+    warnings: list[str]
 }
 
 enum Effect {
-    SetText(String, String),
-    SetValue(String, String),
-    SetAttribute(String, String, String),
-    AddClass(String, String),
-    RemoveClass(String, String),
-    ToggleClass(String, String),
-    Focus(String),
-    Show(String),
-    Hide(String),
-    ToggleVisible(String),
-    Navigate(String),
-    Go(String),
-    ScrollTo(String),
-    CopyValue(String, String),
-    CopyToClipboard(String),
-    SetState(String, String),
-    ToggleState(String),
-    IncrementState(String, Int),
+    SetText(str, str),
+    SetValue(str, str),
+    SetAttribute(str, str, str),
+    AddClass(str, str),
+    RemoveClass(str, str),
+    ToggleClass(str, str),
+    Focus(str),
+    Show(str),
+    Hide(str),
+    ToggleVisible(str),
+    Navigate(str),
+    Go(str),
+    ScrollTo(str),
+    CopyValue(str, str),
+    CopyToClipboard(str),
+    SetState(str, str),
+    ToggleState(str),
+    IncrementState(str, int),
     Fetch(FetchSpec),
-    ClearState(String),
-    OpenDialog(String),
-    CloseDialog(String),
+    ClearState(str),
+    OpenDialog(str),
+    CloseDialog(str),
 }
 
 // A composable, typed sequence of DOM effects. Attached to an element event via
 // Node.on. raven-web serializes it into the element and interprets it in the
 // generated runtime, so the author never writes JavaScript.
-struct Behavior {
-    effects: List<Effect>,
-    prevent: Bool,
+class Behavior {
+    effects: list[Effect]
+    prevent: bool
     // Debounce window in milliseconds; 0 runs immediately. For events that
     // fire in bursts (typing in a search field).
-    wait: Int,
+    wait: int
     // A key name filter for keyboard events; empty matches any key. Set via
     // Node.on_key.
-    key: String,
+    key: str
     // One line per effect this behavior dropped. Node.on merges them into the
     // element, so Page.warnings() sees them.
-    warnings: List<String>,
+    warnings: list[str]
 }
 
-fun _warn_effect(warnings: List<String>, method: String, reason: String, value: String) {
+fun _warn_effect(warnings: list[str], method: str, reason: str, value: str) {
     warnings.push(
         "dropped ".concat(method).concat(": ").concat(reason).concat(" ").concat(_quote_word(value)),
     )
 }
 
-fun _valid_class_token(value: String) -> Bool {
+fun _valid_class_token(value: str) -> bool {
     if value.length() == 0 {
         return false
     }
-    let i = 0
+    var i = 0
     while i < value.length() {
         let b = value.byte_at(i)
-        if b == 32 || b == 9 || b == 10 || b == 13 {
+        if b == 32 or b == 9 or b == 10 or b == 13 {
             return false
         }
         i += 1
@@ -1797,28 +1822,28 @@ fun _valid_class_token(value: String) -> Bool {
 
 // Build a typed request: request("POST", "/login").field("email", "#email")
 //     .store("auth").on_ok(Behavior.new().hide("#login"))
-fun request(method: String, url: String) -> FetchSpec {
-    let body_fields: List<BodyField> = []
-    let then: List<Effect> = []
-    let on_error: List<Effect> = []
-    let warnings: List<String> = []
-    return FetchSpec {
+fun request(method: str, url: str) -> FetchSpec {
+    let body_fields: list[BodyField] = []
+    let then: list[Effect] = []
+    let on_error: list[Effect] = []
+    let warnings: list[str] = []
+    return FetchSpec(
         method: method.to_upper(),
-        url,
-        body_fields,
+        url: url,
+        body_fields: body_fields,
         auth_state: "",
         into_state: "",
-        then,
-        on_error,
-        warnings,
-    }
+        then: then,
+        on_error: on_error,
+        warnings: warnings,
+    )
 }
 
 impl FetchSpec {
     // Read `selector`'s value at send time and send it as JSON field `name`.
-    fun field(self, name: String, selector: String) -> FetchSpec {
+    fun field(self, name: str, selector: str) -> FetchSpec {
         if _css_safe_text(selector) {
-            self.body_fields.push(BodyField { name, selector, literal: "" })
+            self.body_fields.push(BodyField(name: name, selector: selector, literal: ""))
         } else {
             _warn_effect(self.warnings, "fetch field", "invalid selector", selector)
         }
@@ -1826,13 +1851,13 @@ impl FetchSpec {
     }
 
     // Send a constant JSON field, for a request whose value is not user input.
-    fun value(self, name: String, literal: String) -> FetchSpec {
-        self.body_fields.push(BodyField { name, selector: "", literal })
+    fun value(self, name: str, literal: str) -> FetchSpec {
+        self.body_fields.push(BodyField(name: name, selector: "", literal: literal))
         return self
     }
 
     // Send state[key] as an Authorization: Bearer header.
-    fun auth(self, state_key: String) -> FetchSpec {
+    fun auth(self, state_key: str) -> FetchSpec {
         if _css_safe_text(state_key) {
             self.auth_state = state_key
         } else {
@@ -1842,7 +1867,7 @@ impl FetchSpec {
     }
 
     // Store the decoded JSON response in state[key], where bindings can read it.
-    fun store(self, state_key: String) -> FetchSpec {
+    fun store(self, state_key: str) -> FetchSpec {
         if _css_safe_text(state_key) {
             self.into_state = state_key
         } else {
@@ -1884,9 +1909,9 @@ impl FetchSpec {
 }
 
 fun behavior() -> Behavior {
-    let effects: List<Effect> = []
-    let warnings: List<String> = []
-    return Behavior { effects, prevent: false, wait: 0, key: "", warnings }
+    let effects: list[Effect] = []
+    let warnings: list[str] = []
+    return Behavior(effects: effects, prevent: false, wait: 0, key: "", warnings: warnings)
 }
 
 impl Behavior {
@@ -1902,7 +1927,7 @@ impl Behavior {
 
     // Run only after the event has been quiet for `ms` milliseconds, so a
     // search field fires once per pause instead of once per keystroke.
-    fun debounce(self, ms: Int) -> Behavior {
+    fun debounce(self, ms: int) -> Behavior {
         if ms > 0 {
             self.wait = ms
         } else {
@@ -1914,7 +1939,7 @@ impl Behavior {
     // Open a dialog element as a modal: the browser supplies the focus trap,
     // Escape-to-close, and the backdrop. Falls back to the open attribute
     // where showModal is missing.
-    fun open_dialog(self, selector: String) -> Behavior {
+    fun open_dialog(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.OpenDialog(selector))
         } else {
@@ -1923,7 +1948,7 @@ impl Behavior {
         return self
     }
 
-    fun close_dialog(self, selector: String) -> Behavior {
+    fun close_dialog(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.CloseDialog(selector))
         } else {
@@ -1932,7 +1957,7 @@ impl Behavior {
         return self
     }
 
-    fun set_text(self, selector: String, value: String) -> Behavior {
+    fun set_text(self, selector: str, value: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.SetText(selector, value))
         } else {
@@ -1941,7 +1966,7 @@ impl Behavior {
         return self
     }
 
-    fun set_value(self, selector: String, value: String) -> Behavior {
+    fun set_value(self, selector: str, value: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.SetValue(selector, value))
         } else {
@@ -1950,12 +1975,12 @@ impl Behavior {
         return self
     }
 
-    fun set_attribute(self, selector: String, name: String, value: String) -> Behavior {
-        if !_css_safe_text(selector) {
+    fun set_attribute(self, selector: str, name: str, value: str) -> Behavior {
+        if not _css_safe_text(selector) {
             _warn_effect(self.warnings, "set_attribute", "invalid selector", selector)
             return self
         }
-        if !_valid_attr_name(name) {
+        if not _valid_attr_name(name) {
             _warn_effect(self.warnings, "set_attribute", "invalid or executable attribute name", name)
             return self
         }
@@ -1963,12 +1988,12 @@ impl Behavior {
         return self
     }
 
-    fun add_class(self, selector: String, class_name: String) -> Behavior {
-        if !_css_safe_text(selector) {
+    fun add_class(self, selector: str, class_name: str) -> Behavior {
+        if not _css_safe_text(selector) {
             _warn_effect(self.warnings, "add_class", "invalid selector", selector)
             return self
         }
-        if !_valid_class_token(class_name) {
+        if not _valid_class_token(class_name) {
             _warn_effect(self.warnings, "add_class", "invalid class token", class_name)
             return self
         }
@@ -1976,12 +2001,12 @@ impl Behavior {
         return self
     }
 
-    fun remove_class(self, selector: String, class_name: String) -> Behavior {
-        if !_css_safe_text(selector) {
+    fun remove_class(self, selector: str, class_name: str) -> Behavior {
+        if not _css_safe_text(selector) {
             _warn_effect(self.warnings, "remove_class", "invalid selector", selector)
             return self
         }
-        if !_valid_class_token(class_name) {
+        if not _valid_class_token(class_name) {
             _warn_effect(self.warnings, "remove_class", "invalid class token", class_name)
             return self
         }
@@ -1989,12 +2014,12 @@ impl Behavior {
         return self
     }
 
-    fun toggle_class(self, selector: String, class_name: String) -> Behavior {
-        if !_css_safe_text(selector) {
+    fun toggle_class(self, selector: str, class_name: str) -> Behavior {
+        if not _css_safe_text(selector) {
             _warn_effect(self.warnings, "toggle_class", "invalid selector", selector)
             return self
         }
-        if !_valid_class_token(class_name) {
+        if not _valid_class_token(class_name) {
             _warn_effect(self.warnings, "toggle_class", "invalid class token", class_name)
             return self
         }
@@ -2002,7 +2027,7 @@ impl Behavior {
         return self
     }
 
-    fun focus(self, selector: String) -> Behavior {
+    fun focus(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.Focus(selector))
         } else {
@@ -2011,7 +2036,7 @@ impl Behavior {
         return self
     }
 
-    fun show(self, selector: String) -> Behavior {
+    fun show(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.Show(selector))
         } else {
@@ -2020,7 +2045,7 @@ impl Behavior {
         return self
     }
 
-    fun hide(self, selector: String) -> Behavior {
+    fun hide(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.Hide(selector))
         } else {
@@ -2029,7 +2054,7 @@ impl Behavior {
         return self
     }
 
-    fun toggle_visible(self, selector: String) -> Behavior {
+    fun toggle_visible(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.ToggleVisible(selector))
         } else {
@@ -2040,7 +2065,7 @@ impl Behavior {
 
     // Navigate to a safe URL (same rules as href/src). javascript: and other
     // unsafe schemes are rejected, so this can never smuggle in script.
-    fun navigate(self, url: String) -> Behavior {
+    fun navigate(self, url: str) -> Behavior {
         if _safe_url(url) {
             self.effects.push(Effect.Navigate(url))
         } else {
@@ -2051,7 +2076,7 @@ impl Behavior {
 
     // Move to a client route without reloading the document, so state survives
     // the navigation. Use this with Router; `navigate` still does a full load.
-    fun go(self, path: String) -> Behavior {
+    fun go(self, path: str) -> Behavior {
         if _valid_route_pattern(path) {
             self.effects.push(Effect.Go(_normalize_path(path)))
         } else {
@@ -2060,7 +2085,7 @@ impl Behavior {
         return self
     }
 
-    fun scroll_to(self, selector: String) -> Behavior {
+    fun scroll_to(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.ScrollTo(selector))
         } else {
@@ -2070,12 +2095,12 @@ impl Behavior {
     }
 
     // Copy the value or text of one element into another.
-    fun copy_value(self, from_selector: String, to_selector: String) -> Behavior {
-        if !_css_safe_text(from_selector) {
+    fun copy_value(self, from_selector: str, to_selector: str) -> Behavior {
+        if not _css_safe_text(from_selector) {
             _warn_effect(self.warnings, "copy_value", "invalid selector", from_selector)
             return self
         }
-        if !_css_safe_text(to_selector) {
+        if not _css_safe_text(to_selector) {
             _warn_effect(self.warnings, "copy_value", "invalid selector", to_selector)
             return self
         }
@@ -2083,7 +2108,7 @@ impl Behavior {
         return self
     }
 
-    fun copy_to_clipboard(self, selector: String) -> Behavior {
+    fun copy_to_clipboard(self, selector: str) -> Behavior {
         if _css_safe_text(selector) {
             self.effects.push(Effect.CopyToClipboard(selector))
         } else {
@@ -2095,7 +2120,7 @@ impl Behavior {
     // Client state effects. State is a page-level key to value store; bindings
     // (Page.bind_*) reflect it to the DOM, so counters, tabs, and toggles work
     // with no author JavaScript.
-    fun set_state(self, key: String, value: String) -> Behavior {
+    fun set_state(self, key: str, value: str) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.SetState(key, value))
         } else {
@@ -2104,7 +2129,7 @@ impl Behavior {
         return self
     }
 
-    fun toggle_state(self, key: String) -> Behavior {
+    fun toggle_state(self, key: str) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.ToggleState(key))
         } else {
@@ -2113,7 +2138,7 @@ impl Behavior {
         return self
     }
 
-    fun increment_state(self, key: String, by: Int) -> Behavior {
+    fun increment_state(self, key: str, by: int) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.IncrementState(key, by))
         } else {
@@ -2122,7 +2147,7 @@ impl Behavior {
         return self
     }
 
-    fun clear_state(self, key: String) -> Behavior {
+    fun clear_state(self, key: str) -> Behavior {
         if _css_safe_text(key) {
             self.effects.push(Effect.ClearState(key))
         } else {
@@ -2134,7 +2159,7 @@ impl Behavior {
     // Typed state writes. These take the Signal handle rather than a state
     // string, so the name is written once at the declaration and checked by the
     // compiler everywhere else.
-    fun set(self, target: Signal, value: String) -> Behavior {
+    fun set(self, target: Signal, value: str) -> Behavior {
         return self.set_state(target.key, value)
     }
 
@@ -2142,7 +2167,7 @@ impl Behavior {
         return self.toggle_state(target.key)
     }
 
-    fun increment(self, target: Signal, by: Int) -> Behavior {
+    fun increment(self, target: Signal, by: int) -> Behavior {
         return self.increment_state(target.key, by)
     }
 
@@ -2156,7 +2181,7 @@ impl Behavior {
         for warning in spec.warnings {
             self.warnings.push(warning)
         }
-        if _safe_url(spec.url) || spec.url.starts_with("/") {
+        if _safe_url(spec.url) or spec.url.starts_with("/") {
             self.effects.push(Effect.Fetch(spec))
         } else {
             _warn_effect(self.warnings, "fetch", "unsafe URL", spec.url)
@@ -2165,33 +2190,33 @@ impl Behavior {
     }
 }
 
-fun _js_string(value: String) -> String {
+fun _js_string(value: str) -> str {
     return stringify(JsonValue.Str(value))
 }
 
 // Each effect serializes to a compact JSON op array. Every string is JSON
 // encoded, so selectors and values can never break out of the data attribute.
-fun _op2(code: String, a: String) -> String {
+fun _op2(code: str, a: str) -> str {
     return "[".concat(_js_string(code)).concat(",").concat(_js_string(a)).concat("]")
 }
 
-fun _op3(code: String, a: String, b: String) -> String {
+fun _op3(code: str, a: str, b: str) -> str {
     return "[".concat(_js_string(code)).concat(",").concat(_js_string(a)).concat(",").concat(
         _js_string(b),
     ).concat("]")
 }
 
-fun _op4(code: String, a: String, b: String, c: String) -> String {
+fun _op4(code: str, a: str, b: str, c: str) -> str {
     return "[".concat(_js_string(code)).concat(",").concat(_js_string(a)).concat(",").concat(
         _js_string(b),
     ).concat(",").concat(_js_string(c)).concat("]")
 }
 
-fun _serialize_effects(effects: List<Effect>) -> String {
-    let out = "["
-    let first = true
+fun _serialize_effects(effects: list[Effect]) -> str {
+    var out = "["
+    var first = true
     for effect in effects {
-        if !first {
+        if not first {
             out = out.concat(",")
         }
         out = out.concat(_serialize_effect(effect))
@@ -2201,14 +2226,14 @@ fun _serialize_effects(effects: List<Effect>) -> String {
 }
 
 // ["fetch",{"m":..,"u":..,"b":[[name,sel]],"a":authKey,"s":storeKey,"t":[..],"e":[..]}]
-fun _serialize_fetch(spec: FetchSpec) -> String {
-    let out = "[".concat(_js_string("fetch")).concat(",{")
+fun _serialize_fetch(spec: FetchSpec) -> str {
+    var out = "[".concat(_js_string("fetch")).concat(",{")
     out = out.concat(_js_string("m")).concat(":").concat(_js_string(spec.method))
     out = out.concat(",").concat(_js_string("u")).concat(":").concat(_js_string(spec.url))
     out = out.concat(",").concat(_js_string("b")).concat(":[")
-    let first = true
+    var first = true
     for field in spec.body_fields {
-        if !first {
+        if not first {
             out = out.concat(",")
         }
         out = out.concat("[").concat(_js_string(field.name)).concat(",").concat(
@@ -2226,35 +2251,35 @@ fun _serialize_fetch(spec: FetchSpec) -> String {
     return out.concat("}]")
 }
 
-fun _serialize_effect(effect: Effect) -> String {
+fun _serialize_effect(effect: Effect) -> str {
     return match effect {
-        SetText(selector, value) -> _op3("st", selector, value),
-        SetValue(selector, value) -> _op3("sv", selector, value),
-        SetAttribute(selector, name, value) -> _op4("sa", selector, name, value),
-        AddClass(selector, class_name) -> _op3("ac", selector, class_name),
-        RemoveClass(selector, class_name) -> _op3("rc", selector, class_name),
-        ToggleClass(selector, class_name) -> _op3("tc", selector, class_name),
-        Focus(selector) -> _op2("fo", selector),
-        Show(selector) -> _op2("sh", selector),
-        Hide(selector) -> _op2("hd", selector),
-        ToggleVisible(selector) -> _op2("tv", selector),
-        Navigate(url) -> _op2("nav", url),
-        Go(path) -> _op2("go", path),
-        ScrollTo(selector) -> _op2("scr", selector),
-        CopyValue(from_selector, to_selector) -> _op3("cv", from_selector, to_selector),
-        CopyToClipboard(selector) -> _op2("cc", selector),
-        SetState(key, value) -> _op3("ss", key, value),
-        ToggleState(key) -> _op2("ts", key),
-        IncrementState(key, by) -> _op3("is", key, by.to_string()),
-        ClearState(key) -> _op2("cs", key),
-        Fetch(spec) -> _serialize_fetch(spec),
-        OpenDialog(selector) -> _op2("dop", selector),
-        CloseDialog(selector) -> _op2("dcl", selector),
+        case SetText(selector, value) { _op3("st", selector, value) }
+        case SetValue(selector, value) { _op3("sv", selector, value) }
+        case SetAttribute(selector, name, value) { _op4("sa", selector, name, value) }
+        case AddClass(selector, class_name) { _op3("ac", selector, class_name) }
+        case RemoveClass(selector, class_name) { _op3("rc", selector, class_name) }
+        case ToggleClass(selector, class_name) { _op3("tc", selector, class_name) }
+        case Focus(selector) { _op2("fo", selector) }
+        case Show(selector) { _op2("sh", selector) }
+        case Hide(selector) { _op2("hd", selector) }
+        case ToggleVisible(selector) { _op2("tv", selector) }
+        case Navigate(url) { _op2("nav", url) }
+        case Go(path) { _op2("go", path) }
+        case ScrollTo(selector) { _op2("scr", selector) }
+        case CopyValue(from_selector, to_selector) { _op3("cv", from_selector, to_selector) }
+        case CopyToClipboard(selector) { _op2("cc", selector) }
+        case SetState(key, value) { _op3("ss", key, value) }
+        case ToggleState(key) { _op2("ts", key) }
+        case IncrementState(key, by) { _op3("is", key, by.to_string()) }
+        case ClearState(key) { _op2("cs", key) }
+        case Fetch(spec) { _serialize_fetch(spec) }
+        case OpenDialog(selector) { _op2("dop", selector) }
+        case CloseDialog(selector) { _op2("dcl", selector) }
     }
 }
 
-fun _serialize_behavior(behavior: Behavior) -> String {
-    let out = "{".concat(_js_string("p")).concat(":")
+fun _serialize_behavior(behavior: Behavior) -> str {
+    var out = "{".concat(_js_string("p")).concat(":")
     if behavior.prevent {
         out = out.concat("1")
     } else {
@@ -2267,9 +2292,9 @@ fun _serialize_behavior(behavior: Behavior) -> String {
         out = out.concat(",").concat(_js_string("k")).concat(":").concat(_js_string(behavior.key))
     }
     out = out.concat(",").concat(_js_string("e")).concat(":[")
-    let first = true
+    var first = true
     for effect in behavior.effects {
-        if !first {
+        if not first {
             out = out.concat(",")
         }
         out = out.concat(_serialize_effect(effect))
@@ -2284,8 +2309,8 @@ fun _serialize_behavior(behavior: Behavior) -> String {
 // The generated runtime. The dependency graph is resolved at build time, so a
 // state write updates only the bindings that read that key, and a list binding
 // reconciles by key and updates rows in place instead of rebuilding the subtree.
-fun _render_runtime() -> String {
-    let out = "(function(){'use strict';"
+fun _render_runtime() -> str {
+    var out = "(function(){'use strict';"
     out = out.concat(
         "var rw_init=window.RW_INIT||{};var rw_state=rw_init.s||{};var rw_binds=rw_init.b||[];var rw_keep=rw_init.p||[];var rw_onload=rw_init.l||[];var rw_deps=rw_init.d||{};var rw_base=rw_init.z||'';",
     )
@@ -2546,58 +2571,58 @@ fun _render_runtime() -> String {
 
 // A page interval: run these effects every `ms` milliseconds, for carousels,
 // clocks, and polling refreshes.
-struct TimerSpec {
-    ms: Int,
-    effects: List<Effect>,
+class TimerSpec {
+    ms: int
+    effects: list[Effect]
 }
 
-struct StatePair {
-    key: String,
-    value: String,
-    raw: Bool,
+class StatePair {
+    key: str
+    value: str
+    raw: bool
 }
 
 // A reflection of client state to the DOM. kind is text, class, attr, visible,
 // or list; arg carries the class name, attribute name, or (for list) the
 // rendered item template. A list binding may filter items by a field value.
-struct Binding {
-    kind: String,
-    selector: String,
-    key: String,
-    arg: String,
-    filter_field: String,
-    filter_value: String,
-    expr: String,
-    dep_keys: List<String>,
+class Binding {
+    kind: str
+    selector: str
+    key: str
+    arg: str
+    filter_field: str
+    filter_value: str
+    expr: str
+    dep_keys: list[str]
 }
 
-fun _binding(kind: String, selector: String, key: String, arg: String) -> Binding {
-    let dep_keys: List<String> = [_root_key(key)]
-    return Binding {
-        kind,
-        selector,
-        key,
-        arg,
+fun _binding(kind: str, selector: str, key: str, arg: str) -> Binding {
+    let dep_keys: list[str] = [_root_key(key)]
+    return Binding(
+        kind: kind,
+        selector: selector,
+        key: key,
+        arg: arg,
         filter_field: "",
         filter_value: "",
         expr: "",
-        dep_keys,
-    }
+        dep_keys: dep_keys,
+    )
 }
 
 // Marker assignment. A node that declares bindings gets a data-rw-b marker, so
 // the generated binding can target it without the author writing a selector.
 // Assignment is idempotent and pre-order, so html() and js() agree on markers
 // whichever runs first.
-struct BindCounter {
-    next: Int,
+class BindCounter {
+    next: int
 }
 
 fun _assign_marks(node: Node, counter: BindCounter) {
-    if node.binds.len() > 0 && node.mark < 0 {
+    if node.binds.len() > 0 and node.mark < 0 {
         node.mark = counter.next
         counter.next = counter.next + 1
-        node.attrs.push(Attribute { name: "data-rw-b", value: node.mark.to_string() })
+        node.attrs.push(Attribute(name: "data-rw-b", value: node.mark.to_string()))
     }
     for kid in node.kids {
         _assign_marks(kid, counter)
@@ -2606,13 +2631,13 @@ fun _assign_marks(node: Node, counter: BindCounter) {
 
 // The value must be quoted: an unquoted CSS attribute value cannot start with a
 // digit, so [data-rw-b=0] is invalid and silently matches nothing.
-fun _mark_selector(mark: Int) -> String {
+fun _mark_selector(mark: int) -> str {
     return "[data-rw-b=\"".concat(mark.to_string()).concat("\"]")
 }
 
 // Gather every warning in the tree, depth first. Dropped nodes stay in their
 // parent's kids list precisely so this walk still reaches them.
-fun _collect_warnings(node: Node, out: List<String>) {
+fun _collect_warnings(node: Node, out: list[str]) {
     for warning in node.warnings {
         out.push(warning)
     }
@@ -2621,21 +2646,21 @@ fun _collect_warnings(node: Node, out: List<String>) {
     }
 }
 
-fun _collect_binds(node: Node, out: List<Binding>) {
+fun _collect_binds(node: Node, out: list[Binding]) {
     if node.mark >= 0 {
         let selector = _mark_selector(node.mark)
         for bind in node.binds {
             out.push(
-                Binding {
+                Binding(
                     kind: bind.kind,
-                    selector,
+                    selector: selector,
                     key: bind.path,
                     arg: bind.arg,
                     filter_field: bind.filter_field,
                     filter_value: bind.filter_value,
                     expr: bind.expr,
                     dep_keys: bind.dep_keys,
-                },
+                ),
             )
         }
     }
@@ -2645,7 +2670,7 @@ fun _collect_binds(node: Node, out: List<Binding>) {
 }
 
 // A binding reads a dotted path; it depends on the root state key.
-fun _root_key(path: String) -> String {
+fun _root_key(path: str) -> str {
     let parts = path.split(".")
     if parts.len() == 0 {
         return path
@@ -2653,7 +2678,7 @@ fun _root_key(path: String) -> String {
     return parts[0]
 }
 
-fun _contains_str(list: List<String>, value: String) -> Bool {
+fun _contains_str(list: list[str], value: str) -> bool {
     for item in list {
         if item == value {
             return true
@@ -2665,24 +2690,24 @@ fun _contains_str(list: List<String>, value: String) -> Bool {
 // The dependency graph, resolved at build time: state key to the bindings that
 // read it. The runtime uses this to update only what changed, instead of
 // re-running every binding on every state write.
-fun _serialize_deps(bindings: List<Binding>) -> String {
-    let out = "{"
-    let seen: List<String> = []
-    let first = true
-    let i = 0
+fun _serialize_deps(bindings: list[Binding]) -> str {
+    var out = "{"
+    let seen: list[str] = []
+    var first = true
+    var i = 0
     while i < bindings.len() {
         for key in bindings[i].dep_keys {
-            if !_contains_str(seen, key) {
+            if not _contains_str(seen, key) {
                 seen.push(key)
-                if !first {
+                if not first {
                     out = out.concat(",")
                 }
                 out = out.concat(_js_string(key)).concat(":[")
-                let j = 0
-                let ifirst = true
+                var j = 0
+                var ifirst = true
                 while j < bindings.len() {
                     if _contains_str(bindings[j].dep_keys, key) {
-                        if !ifirst {
+                        if not ifirst {
                             out = out.concat(",")
                         }
                         out = out.concat(j.to_string())
@@ -2700,31 +2725,27 @@ fun _serialize_deps(bindings: List<Binding>) -> String {
 }
 
 fun _serialize_config(
-    state: List<StatePair>,
-    bindings: List<Binding>,
-    persisted: List<String>,
-    load_effects: List<Effect>,
-    timers: List<TimerSpec>,
-    base: String,
-) -> String {
-    let out = "{".concat(_js_string("s")).concat(":{")
-    let first = true
+    state: list[StatePair],
+    bindings: list[Binding],
+    persisted: list[str],
+    load_effects: list[Effect],
+    timers: list[TimerSpec],
+    base: str,
+) -> str {
+    var out = "{".concat(_js_string("s")).concat(":{")
+    var first = true
     for pair in state {
-        if !first {
+        if not first {
             out = out.concat(",")
         }
-        let encoded = if pair.raw {
-            pair.value
-        } else {
-            _js_string(pair.value)
-        }
+        let encoded = pair.value if pair.raw else _js_string(pair.value)
         out = out.concat(_js_string(pair.key)).concat(":").concat(encoded)
         first = false
     }
     out = out.concat("},").concat(_js_string("b")).concat(":[")
-    let bfirst = true
+    var bfirst = true
     for binding in bindings {
-        if !bfirst {
+        if not bfirst {
             out = out.concat(",")
         }
         out = out.concat("[").concat(_js_string(binding.kind)).concat(",").concat(
@@ -2743,9 +2764,9 @@ fun _serialize_config(
         bfirst = false
     }
     out = out.concat("],").concat(_js_string("p")).concat(":[")
-    let pfirst = true
+    var pfirst = true
     for key in persisted {
-        if !pfirst {
+        if not pfirst {
             out = out.concat(",")
         }
         out = out.concat(_js_string(key))
@@ -2757,9 +2778,9 @@ fun _serialize_config(
     out = out.concat(",").concat(_js_string("d")).concat(":").concat(_serialize_deps(bindings))
     out = out.concat(",").concat(_js_string("z")).concat(":").concat(_js_string(base))
     out = out.concat(",").concat(_js_string("t")).concat(":[")
-    let tfirst = true
+    var tfirst = true
     for timer in timers {
-        if !tfirst {
+        if not tfirst {
             out = out.concat(",")
         }
         out = out.concat("[").concat(timer.ms.to_string()).concat(",").concat(
@@ -2770,64 +2791,64 @@ fun _serialize_config(
     return out.concat("]}")
 }
 
-struct Page {
-    title: String,
-    root: Node,
-    styles: Stylesheet,
-    language: String,
-    description: String,
-    favicon: String,
-    files: List<StaticFile>,
-    css_links: List<String>,
-    state: List<StatePair>,
-    bindings: List<Binding>,
-    persisted: List<String>,
-    load_effects: List<Effect>,
-    timers: List<TimerSpec>,
-    single_page: Bool,
+class Page {
+    title: str
+    root: Node
+    styles: Stylesheet
+    language: str
+    description: str
+    favicon: str
+    files: list[StaticFile]
+    css_links: list[str]
+    state: list[StatePair]
+    bindings: list[Binding]
+    persisted: list[str]
+    load_effects: list[Effect]
+    timers: list[TimerSpec]
+    single_page: bool
     // Typed head metadata: name/content metas, property/content metas (Open
     // Graph, Twitter), preconnect origins, serialized JSON-LD blocks, and the
     // singular canonical URL and theme color.
-    metas: List<Attribute>,
-    meta_props: List<Attribute>,
-    preconnects: List<Attribute>,
-    structured: List<String>,
+    metas: list[Attribute]
+    meta_props: list[Attribute]
+    preconnects: list[Attribute]
+    structured: list[str]
     // hreflang alternates: name is the language code, value is the URL.
-    alternates: List<Attribute>,
-    canonical_url: String,
-    theme_color_value: String,
+    alternates: list[Attribute]
+    canonical_url: str
+    theme_color_value: str
     // With optimize set, the emitted CSS is minified and styles.css/app.js
     // carry a content hash in their names, so far-future caching is safe.
-    optimize_mode: Bool,
+    optimize_mode: bool
     // A deployment prefix ("/repo" on a project page). Asset references
     // become absolute under it and the client router works in site-local
     // paths beneath it.
-    base: String,
+    base: str
     // Page-level dropped inputs; warnings() adds the tree's and the styles'.
-    page_warnings: List<String>,
+    page_warnings: list[str]
     // With strict set, write_static refuses to write while any warning exists.
-    strict_mode: Bool,
+    strict_mode: bool
 }
 
-struct StaticOutput {
-    directory: String,
-    paths: List<String>,
+class StaticOutput {
+    directory: str
+    paths: list[str]
 }
 
 impl StaticOutput {
-    fun directory(self) -> String {
+    fun directory(self) -> str {
         return self.directory
     }
 
-    fun paths(self) -> List<String> {
+    fun paths(self) -> list[str] {
         return self.paths
     }
 
-    fun file_count(self) -> Int {
+    fun file_count(self) -> int {
         return self.paths.len()
     }
 
-    fun contains(self, path: String) -> Bool {
+    fun contains(self, path: str) -> bool {
         for item in self.paths {
             if item == path {
                 return true
@@ -2837,60 +2858,60 @@ impl StaticOutput {
     }
 }
 
-fun _empty_css_links() -> List<String> {
-    let css_links: List<String> = []
+fun _empty_css_links() -> list[str] {
+    let css_links: list[str] = []
     return css_links
 }
 
-fun _empty_files() -> List<StaticFile> {
-    let files: List<StaticFile> = []
+fun _empty_files() -> list[StaticFile] {
+    let files: list[StaticFile] = []
     return files
 }
 
-fun _empty_state() -> List<StatePair> {
-    let state: List<StatePair> = []
+fun _empty_state() -> list[StatePair] {
+    let state: list[StatePair] = []
     return state
 }
 
-fun _empty_bindings() -> List<Binding> {
-    let bindings: List<Binding> = []
+fun _empty_bindings() -> list[Binding] {
+    let bindings: list[Binding] = []
     return bindings
 }
 
-fun _empty_persisted() -> List<String> {
-    let persisted: List<String> = []
+fun _empty_persisted() -> list[str] {
+    let persisted: list[str] = []
     return persisted
 }
 
-fun _empty_effects() -> List<Effect> {
-    let effects: List<Effect> = []
+fun _empty_effects() -> list[Effect] {
+    let effects: list[Effect] = []
     return effects
 }
 
 // A backslash character without a backslash literal: serialize a string that
 // contains a quote and read the escape the JSON writer produced.
-fun _backslash() -> String {
+fun _backslash() -> str {
     return stringify(JsonValue.Str(_quote())).substring(1, 2)
 }
 
 // JSON destined for a script element must not be able to close it. Replacing
 // every angle bracket with its JSON unicode escape keeps the payload valid
 // JSON and inert as markup, whatever strings the data carries.
-fun _escape_json_for_script(json: String) -> String {
+fun _escape_json_for_script(json: str) -> str {
     let bs = _backslash()
     return json.replace("<", bs.concat("u003c")).replace(">", bs.concat("u003e"))
 }
 
 // An eight-hex-digit content fingerprint. Not cryptographic; it only has to
 // change when the content changes, so caches can be immutable.
-fun _fingerprint(content: String) -> String {
-    let h = fnv1a(content)
+fun _fingerprint(content: str) -> str {
+    var h = fnv1a(content)
     if h < 0 {
         h = 0 - h
     }
     let digits = "0123456789abcdef"
-    let out = ""
-    let i = 0
+    var out = ""
+    var i = 0
     while i < 8 {
         let d = h % 16
         out = digits.substring(d, d + 1).concat(out)
@@ -2904,12 +2925,12 @@ fun _fingerprint(content: String) -> String {
 // and removes spaces around structural punctuation. Quoted strings pass
 // through untouched. Space before a colon is kept on purpose: ".a :hover"
 // and ".a:hover" are different selectors.
-fun _minify_css(css: String) -> String {
-    let out = ""
-    let i = 0
+fun _minify_css(css: str) -> str {
+    var out = ""
+    var i = 0
     let n = css.length()
-    let quote = 0
-    let pending = false
+    var quote = 0
+    var pending = false
     while i < n {
         let b = css.byte_at(i)
         if quote != 0 {
@@ -2918,34 +2939,34 @@ fun _minify_css(css: String) -> String {
                 quote = 0
             }
             i += 1
-        } else if b == 34 || b == 39 {
-            if pending && out.length() > 0 {
+        } else if b == 34 or b == 39 {
+            if pending and out.length() > 0 {
                 out = out.concat(" ")
             }
             pending = false
             quote = b
             out = out.concat(css.substring(i, i + 1))
             i += 1
-        } else if b == 47 && i + 1 < n && css.byte_at(i + 1) == 42 {
+        } else if b == 47 and i + 1 < n and css.byte_at(i + 1) == 42 {
             i += 2
-            while i + 1 < n && !(css.byte_at(i) == 42 && css.byte_at(i + 1) == 47) {
+            while i + 1 < n and not (css.byte_at(i) == 42 and css.byte_at(i + 1) == 47) {
                 i += 1
             }
             i += 2
-        } else if b == 32 || b == 9 || b == 10 || b == 13 {
+        } else if b == 32 or b == 9 or b == 10 or b == 13 {
             pending = true
             i += 1
         } else {
-            let eats_before = b == 123 || b == 125 || b == 59 || b == 44 || b == 62
-            if pending && !eats_before && out.length() > 0 {
+            let eats_before = b == 123 or b == 125 or b == 59 or b == 44 or b == 62
+            if pending and not eats_before and out.length() > 0 {
                 let last = out.byte_at(out.length() - 1)
-                let eats_after = last == 123 || last == 125 || last == 59 || last == 44 || last == 62 || last == 58
-                if !eats_after {
+                let eats_after = last == 123 or last == 125 or last == 59 or last == 44 or last == 62 or last == 58
+                if not eats_after {
                     out = out.concat(" ")
                 }
             }
             pending = false
-            if b == 125 && out.length() > 0 && out.byte_at(out.length() - 1) == 59 {
+            if b == 125 and out.length() > 0 and out.byte_at(out.length() - 1) == 59 {
                 out = out.substring(0, out.length() - 1)
             }
             out = out.concat(css.substring(i, i + 1))
@@ -2956,11 +2977,11 @@ fun _minify_css(css: String) -> String {
 }
 
 // A language tag ("az", "en-US") or the reserved "x-default".
-fun _valid_hreflang(value: String) -> Bool {
-    return value == "x-default" || _valid_language(value)
+fun _valid_hreflang(value: str) -> bool {
+    return value == "x-default" or _valid_language(value)
 }
 
-fun _warn_binding(method: String, selector: String, key: String) -> String {
+fun _warn_binding(method: str, selector: str, key: str) -> str {
     return "dropped ".concat(method).concat(": invalid selector or key (selector ").concat(
         _quote_word(selector),
     ).concat(", key ").concat(_quote_word(key)).concat(")")
@@ -2969,27 +2990,27 @@ fun _warn_binding(method: String, selector: String, key: String) -> String {
 // Remove earlier fingerprinted copies of an emitted asset: files in `dir`
 // matching prefix and suffix that are not the current name. Only raven-web's
 // own two asset names are managed; author files are never touched.
-fun _remove_stale_assets(dir: String, prefix: String, suffix: String, current: String) {
+fun _remove_stale_assets(dir: str, prefix: str, suffix: str, current: str) {
     match list_dir(dir) {
-        Ok(entries) -> {
+        case Ok(entries) {
             for entry in entries {
-                if entry != current && entry.starts_with(prefix) && entry.ends_with(suffix) {
+                if entry != current and entry.starts_with(prefix) and entry.ends_with(suffix) {
                     let _ = remove_file(join(dir, entry))
                 }
             }
-        },
-        Err(_) -> {},
+        }
+        case Err(_) {}
     }
 }
 
-fun _valid_language(value: String) -> Bool {
-    if value.length() == 0 || !_ascii_letter(value.byte_at(0)) {
+fun _valid_language(value: str) -> bool {
+    if value.length() == 0 or not _ascii_letter(value.byte_at(0)) {
         return false
     }
-    let i = 1
+    var i = 1
     while i < value.length() {
         let b = value.byte_at(i)
-        if !_ascii_letter(b) && !(b >= 48 && b <= 57) && b != 45 {
+        if not _ascii_letter(b) and not (b >= 48 and b <= 57) and b != 45 {
             return false
         }
         i += 1
@@ -2999,17 +3020,17 @@ fun _valid_language(value: String) -> Bool {
 
 impl Page {
     // Components cross the package boundary as their rendered Node value.
-    fun new(title: String, root: Node) -> Page {
-        let page_warnings: List<String> = []
-        let metas: List<Attribute> = []
-        let meta_props: List<Attribute> = []
-        let preconnects: List<Attribute> = []
-        let structured: List<String> = []
-        let alternates: List<Attribute> = []
-        let timers: List<TimerSpec> = []
-        return Page {
-            title,
-            root,
+    fun new(title: str, root: Node) -> Page {
+        let page_warnings: list[str] = []
+        let metas: list[Attribute] = []
+        let meta_props: list[Attribute] = []
+        let preconnects: list[Attribute] = []
+        let structured: list[str] = []
+        let alternates: list[Attribute] = []
+        let timers: list[TimerSpec] = []
+        return Page(
+            title: title,
+            root: root,
             styles: Stylesheet.new(),
             language: "en",
             description: "",
@@ -3020,20 +3041,20 @@ impl Page {
             bindings: _empty_bindings(),
             persisted: _empty_persisted(),
             load_effects: _empty_effects(),
-            timers,
+            timers: timers,
             single_page: false,
-            metas,
-            meta_props,
-            preconnects,
-            structured,
-            alternates,
+            metas: metas,
+            meta_props: meta_props,
+            preconnects: preconnects,
+            structured: structured,
+            alternates: alternates,
             canonical_url: "",
             theme_color_value: "",
             optimize_mode: false,
             base: "",
-            page_warnings,
+            page_warnings: page_warnings,
             strict_mode: false,
-        }
+        )
     }
 
     // Production output: minified CSS, and content-hashed names for
@@ -3046,31 +3067,27 @@ impl Page {
     // Deploying under a subpath (https://user.github.io/repo/) needs the
     // prefix declared, or the SPA fallback and deep links resolve assets
     // against the wrong directory.
-    fun base_path(self, path: String) -> Page {
-        if !_valid_route_pattern(path) {
+    fun base_path(self, path: str) -> Page {
+        if not _valid_route_pattern(path) {
             self.page_warnings.push("dropped base_path: invalid path ".concat(_quote_word(path)))
             return self
         }
         let clean = _normalize_path(path)
-        self.base = if clean == "/" {
-            ""
-        } else {
-            clean
-        }
+        self.base = "" if clean == "/" else clean
         return self
     }
 
     // The emitted asset names: fixed by default, content-hashed under
     // optimize().
-    fun css_asset_name(self) -> String {
-        if !self.optimize_mode {
+    fun css_asset_name(self) -> str {
+        if not self.optimize_mode {
             return "styles.css"
         }
         return "styles.".concat(_fingerprint(self.css())).concat(".css")
     }
 
-    fun js_asset_name(self) -> String {
-        if !self.optimize_mode {
+    fun js_asset_name(self) -> str {
+        if not self.optimize_mode {
             return "app.js"
         }
         return "app.".concat(_fingerprint(self.js())).concat(".js")
@@ -3078,9 +3095,9 @@ impl Page {
 
     // A named meta tag: meta("robots", "index, follow"). The name is checked
     // like an attribute name; the content is escaped like any attribute value.
-    fun meta(self, name: String, content: String) -> Page {
+    fun meta(self, name: str, content: str) -> Page {
         if _valid_attr_name(name) {
-            self.metas.push(Attribute { name, value: content })
+            self.metas.push(Attribute(name: name, value: content))
         } else {
             self.page_warnings.push("dropped meta: invalid name ".concat(_quote_word(name)))
         }
@@ -3089,9 +3106,9 @@ impl Page {
 
     // A property meta tag, the Open Graph and Twitter shape:
     // meta_property("og:title", ...).
-    fun meta_property(self, property: String, content: String) -> Page {
+    fun meta_property(self, property: str, content: str) -> Page {
         if _valid_attr_name(property) {
-            self.meta_props.push(Attribute { name: property, value: content })
+            self.meta_props.push(Attribute(name: property, value: content))
         } else {
             self.page_warnings.push(
                 "dropped meta_property: invalid property ".concat(_quote_word(property)),
@@ -3104,21 +3121,21 @@ impl Page {
     // alternate("en", "https://example.com/en/"). Use "x-default" for the
     // fallback. Multilingual sites need one per language plus a self
     // reference, or search engines pick a language arbitrarily.
-    fun alternate(self, hreflang: String, url: String) -> Page {
-        if !_valid_hreflang(hreflang) {
+    fun alternate(self, hreflang: str, url: str) -> Page {
+        if not _valid_hreflang(hreflang) {
             self.page_warnings.push("dropped alternate: invalid hreflang ".concat(_quote_word(hreflang)))
             return self
         }
-        if !_safe_url(url) {
+        if not _safe_url(url) {
             self.page_warnings.push("dropped alternate: unsafe URL ".concat(_quote_word(url)))
             return self
         }
-        self.alternates.push(Attribute { name: hreflang, value: url })
+        self.alternates.push(Attribute(name: hreflang, value: url))
         return self
     }
 
     // The canonical URL for this page. One per page; the last write wins.
-    fun canonical(self, url: String) -> Page {
+    fun canonical(self, url: str) -> Page {
         if _safe_url(url) {
             self.canonical_url = url
         } else {
@@ -3127,7 +3144,7 @@ impl Page {
         return self
     }
 
-    fun theme_color(self, value: String) -> Page {
+    fun theme_color(self, value: str) -> Page {
         if _css_safe_text(value) {
             self.theme_color_value = value
         } else {
@@ -3138,14 +3155,10 @@ impl Page {
 
     // A preconnect hint. Set `cors` for origins fetched with CORS (font
     // files), which need the crossorigin attribute on the hint to be reused.
-    fun preconnect(self, url: String, cors: Bool) -> Page {
+    fun preconnect(self, url: str, cors: bool) -> Page {
         if _safe_url(url) {
-            let flag = if cors {
-                "1"
-            } else {
-                ""
-            }
-            self.preconnects.push(Attribute { name: url, value: flag })
+            let flag = "1" if cors else ""
+            self.preconnects.push(Attribute(name: url, value: flag))
         } else {
             self.page_warnings.push("dropped preconnect: unsafe URL ".concat(_quote_word(url)))
         }
@@ -3170,8 +3183,8 @@ impl Page {
 
     // Every dropped input this page knows about: its own, the view tree's, and
     // the stylesheet's. Empty means every builder call did what it said.
-    fun warnings(self) -> List<String> {
-        let out: List<String> = []
+    fun warnings(self) -> list[str] {
+        let out: list[str] = []
         for warning in self.page_warnings {
             out.push(warning)
         }
@@ -3192,9 +3205,9 @@ impl Page {
 
     // Declare a client state key with an initial value. Behaviors mutate it via
     // set_state/toggle_state/increment_state, and bindings reflect it to the DOM.
-    fun state(self, key: String, initial: String) -> Page {
+    fun state(self, key: str, initial: str) -> Page {
         if _css_safe_text(key) {
-            self.state.push(StatePair { key, value: initial, raw: false })
+            self.state.push(StatePair(key: key, value: initial, raw: false))
         } else {
             self.page_warnings.push("dropped state declaration: invalid key ".concat(_quote_word(key)))
         }
@@ -3205,22 +3218,22 @@ impl Page {
     // made with signal_of keeps its structure rather than arriving as a quoted
     // string.
     fun signal(self, source: Signal) -> Page {
-        if !_css_safe_text(source.key) {
+        if not _css_safe_text(source.key) {
             self.page_warnings.push(
                 "dropped signal registration: invalid key ".concat(_quote_word(source.key)),
             )
             return self
         }
-        self.state.push(StatePair { key: source.key, value: source.initial, raw: source.raw })
+        self.state.push(StatePair(key: source.key, value: source.initial, raw: source.raw))
         return self
     }
 
     // Structured initial state, straight from a typed Raven value. This is the
     // seam the domain crosses without a fetch: the data is in the document on
     // first paint, so there is no request and no empty flash.
-    fun data(self, key: String, value: JsonValue) -> Page {
+    fun data(self, key: str, value: JsonValue) -> Page {
         if _css_safe_text(key) {
-            self.state.push(StatePair { key, value: stringify(value), raw: true })
+            self.state.push(StatePair(key: key, value: stringify(value), raw: true))
         } else {
             self.page_warnings.push("dropped data: invalid key ".concat(_quote_word(key)))
         }
@@ -3229,10 +3242,10 @@ impl Page {
 
     // Every binding the view declared about itself, plus any added through the
     // low-level selector API. Markers are assigned here, idempotently.
-    fun all_bindings(self) -> List<Binding> {
-        let counter = BindCounter { next: 0 }
+    fun all_bindings(self) -> list[Binding] {
+        let counter = BindCounter(next: 0)
         _assign_marks(self.root, counter)
-        let all: List<Binding> = []
+        let all: list[Binding] = []
         for binding in self.bindings {
             all.push(binding)
         }
@@ -3240,8 +3253,8 @@ impl Page {
         return all
     }
 
-    fun bind_text(self, selector: String, key: String) -> Page {
-        if _css_safe_text(selector) && _css_safe_text(key) {
+    fun bind_text(self, selector: str, key: str) -> Page {
+        if _css_safe_text(selector) and _css_safe_text(key) {
             self.bindings.push(_binding("text", selector, key, ""))
         } else {
             self.page_warnings.push(_warn_binding("bind_text", selector, key))
@@ -3249,8 +3262,8 @@ impl Page {
         return self
     }
 
-    fun bind_class(self, selector: String, key: String, class_name: String) -> Page {
-        if _css_safe_text(selector) && _css_safe_text(key) && _valid_class_token(class_name) {
+    fun bind_class(self, selector: str, key: str, class_name: str) -> Page {
+        if _css_safe_text(selector) and _css_safe_text(key) and _valid_class_token(class_name) {
             self.bindings.push(_binding("class", selector, key, class_name))
         } else {
             self.page_warnings.push(_warn_binding("bind_class", selector, key))
@@ -3258,8 +3271,8 @@ impl Page {
         return self
     }
 
-    fun bind_attr(self, selector: String, key: String, attr: String) -> Page {
-        if _css_safe_text(selector) && _css_safe_text(key) && _valid_attr_name(attr) {
+    fun bind_attr(self, selector: str, key: str, attr: str) -> Page {
+        if _css_safe_text(selector) and _css_safe_text(key) and _valid_attr_name(attr) {
             self.bindings.push(_binding("attr", selector, key, attr))
         } else {
             self.page_warnings.push(_warn_binding("bind_attr", selector, key))
@@ -3267,8 +3280,8 @@ impl Page {
         return self
     }
 
-    fun bind_visible(self, selector: String, key: String) -> Page {
-        if _css_safe_text(selector) && _css_safe_text(key) {
+    fun bind_visible(self, selector: str, key: str) -> Page {
+        if _css_safe_text(selector) and _css_safe_text(key) {
             self.bindings.push(_binding("visible", selector, key, ""))
         } else {
             self.page_warnings.push(_warn_binding("bind_visible", selector, key))
@@ -3278,8 +3291,8 @@ impl Page {
 
     // The inverse of bind_visible: hidden while state[key] is set. Lets a signed
     // out view and a signed in view key off the same value.
-    fun bind_hidden(self, selector: String, key: String) -> Page {
-        if _css_safe_text(selector) && _css_safe_text(key) {
+    fun bind_hidden(self, selector: str, key: str) -> Page {
+        if _css_safe_text(selector) and _css_safe_text(key) {
             self.bindings.push(_binding("hidden", selector, key, ""))
         } else {
             self.page_warnings.push(_warn_binding("bind_hidden", selector, key))
@@ -3290,7 +3303,7 @@ impl Page {
     // Run `behavior` every `ms` milliseconds, starting after boot: a
     // carousel advance, a clock, or a polling fetch that keeps a list fresh.
     // Sub-100ms intervals are refused; that cadence belongs to CSS.
-    fun every(self, ms: Int, behavior: Behavior) -> Page {
+    fun every(self, ms: int, behavior: Behavior) -> Page {
         for warning in behavior.warnings {
             self.page_warnings.push(warning)
         }
@@ -3300,7 +3313,7 @@ impl Page {
             )
             return self
         }
-        self.timers.push(TimerSpec { ms, effects: behavior.effects })
+        self.timers.push(TimerSpec(ms: ms, effects: behavior.effects))
         return self
     }
 
@@ -3320,9 +3333,9 @@ impl Page {
     // `selector`. Inside the template, {{field}} is replaced by that item's
     // field. Substitution goes through textContent and setAttribute, never
     // innerHTML, so item data can never inject markup.
-    fun bind_list(self, selector: String, key: String, template: Node) -> Page {
+    fun bind_list(self, selector: str, key: str, template: Node) -> Page {
         _collect_warnings(template, self.page_warnings)
-        if _css_safe_text(selector) && _css_safe_text(key) {
+        if _css_safe_text(selector) and _css_safe_text(key) {
             self.bindings.push(_binding("list", selector, key, template.render()))
         } else {
             self.page_warnings.push(_warn_binding("bind_list", selector, key))
@@ -3333,26 +3346,26 @@ impl Page {
     // bind_list, but only items whose `field` equals `value` (board columns).
     fun bind_list_where(
         self,
-        selector: String,
-        key: String,
+        selector: str,
+        key: str,
         template: Node,
-        field: String,
-        value: String,
+        field: str,
+        value: str,
     ) -> Page {
         _collect_warnings(template, self.page_warnings)
-        if _css_safe_text(selector) && _css_safe_text(key) {
-            let dep_keys: List<String> = [_root_key(key)]
+        if _css_safe_text(selector) and _css_safe_text(key) {
+            let dep_keys: list[str] = [_root_key(key)]
             self.bindings.push(
-                Binding {
+                Binding(
                     kind: "list",
-                    selector,
-                    key,
+                    selector: selector,
+                    key: key,
                     arg: template.render(),
                     filter_field: field,
                     filter_value: value,
                     expr: "",
-                    dep_keys,
-                },
+                    dep_keys: dep_keys,
+                ),
             )
         } else {
             self.page_warnings.push(_warn_binding("bind_list_where", selector, key))
@@ -3366,7 +3379,7 @@ impl Page {
     }
 
     // The low-level form, for state declared with the string API.
-    fun persist_key(self, key: String) -> Page {
+    fun persist_key(self, key: str) -> Page {
         if _css_safe_text(key) {
             self.persisted.push(key)
         } else {
@@ -3380,12 +3393,12 @@ impl Page {
         return self
     }
 
-    fun with_css(self, css: String) -> Page {
+    fun with_css(self, css: str) -> Page {
         self.styles.raw(css)
         return self
     }
 
-    fun lang(self, value: String) -> Page {
+    fun lang(self, value: str) -> Page {
         if _valid_language(value) {
             self.language = value
         } else {
@@ -3394,12 +3407,12 @@ impl Page {
         return self
     }
 
-    fun description(self, value: String) -> Page {
+    fun description(self, value: str) -> Page {
         self.description = value
         return self
     }
 
-    fun favicon(self, url: String) -> Page {
+    fun favicon(self, url: str) -> Page {
         if _safe_url(url) {
             self.favicon = url
         } else {
@@ -3420,23 +3433,23 @@ impl Page {
     }
 
     // Write a local stylesheet and add the matching relative link tag.
-    fun css_file(self, path: String, css: String) -> Page {
+    fun css_file(self, path: str, css: str) -> Page {
         match StaticFile.try_css(path, css) {
-            Ok(file) -> {
+            case Ok(file) {
                 let href = _asset_href(file.path)
                 self.files.push(file)
                 self.css_links.push(href)
-            },
-            Err(reason) -> {
+            }
+            case Err(reason) {
                 self.page_warnings.push(
                     "dropped css_file ".concat(_quote_word(path)).concat(": ").concat(reason),
                 )
-            },
+            }
         }
         return self
     }
 
-    fun link_stylesheet(self, url: String) -> Page {
+    fun link_stylesheet(self, url: str) -> Page {
         if _safe_url(url) {
             self.css_links.push(url)
         } else {
@@ -3445,11 +3458,11 @@ impl Page {
         return self
     }
 
-    fun html(self) -> String {
-        let counter = BindCounter { next: 0 }
+    fun html(self) -> str {
+        let counter = BindCounter(next: 0)
         _assign_marks(self.root, counter)
         let q = _quote()
-        let out = "<!doctype html><html lang=".concat(q).concat(_escape_html(self.language)).concat(
+        var out = "<!doctype html><html lang=".concat(q).concat(_escape_html(self.language)).concat(
             q,
         ).concat("><head><meta charset=").concat(q).concat("utf-8").concat(q).concat("><meta name=").concat(
             q,
@@ -3523,14 +3536,14 @@ impl Page {
         )
     }
 
-    fun css(self) -> String {
+    fun css(self) -> str {
         if self.optimize_mode {
             return _minify_css(self.styles.render())
         }
         return self.styles.render()
     }
 
-    fun js(self) -> String {
+    fun js(self) -> str {
         return "window.RW_INIT=".concat(
             _serialize_config(
                 self.state,
@@ -3546,32 +3559,32 @@ impl Page {
     // An emitted asset reference: relative by default (so pages in
     // subdirectories work), absolute under a base path (so the SPA fallback
     // resolves them from any URL).
-    fun _ref(self, name: String) -> String {
+    fun _ref(self, name: str) -> str {
         if self.base == "" {
             return name
         }
         return self.base.concat("/").concat(name)
     }
 
-    fun write_static(self, dir: String) -> Result<StaticOutput, Error> {
+    fun write_static(self, dir: str) -> Result[StaticOutput, Error] {
         // Dropped inputs surface at the build boundary: printed always, fatal
         // under strict(). This is the loud end of the infallible builder API.
         let warns = self.warnings()
         for warning in warns {
             println("raven-web warning: ".concat(warning))
         }
-        if self.strict_mode && warns.len() > 0 {
+        if self.strict_mode and warns.len() > 0 {
             return Err(
-                Error {
+                Error(
                     kind: "raven-web",
                     message: "strict page has ".concat(warns.len().to_string()).concat(
                         " warning(s); first: ",
                     ).concat(warns.get(0)),
-                },
+                ),
             )
         }
         let _created = create_dir_all(dir)?
-        let paths: List<String> = []
+        let paths: list[str] = []
         let css_name = self.css_asset_name()
         let js_name = self.js_asset_name()
         // Under optimize the names carry a content hash, so earlier hashes
@@ -3604,29 +3617,29 @@ impl Page {
                 paths.push(file.path)
             }
         }
-        return Ok(StaticOutput { directory: dir, paths })
+        return Ok(StaticOutput(directory: dir, paths: paths))
     }
 }
 
 // A shared shell (header, footer, styles, metadata) that wraps each page body
 // into a complete Page, so a multi-page site keeps one consistent chrome.
-struct Layout {
-    header: Node,
-    footer: Node,
-    styles: Stylesheet,
-    description: String,
-    language: String,
+class Layout {
+    header: Node
+    footer: Node
+    styles: Stylesheet
+    description: str
+    language: str
 }
 
 impl Layout {
     fun new() -> Layout {
-        return Layout {
+        return Layout(
             header: Node.fragment(),
             footer: Node.fragment(),
             styles: Stylesheet.new(),
             description: "",
             language: "en",
-        }
+        )
     }
 
     fun header(self, node: Node) -> Layout {
@@ -3644,17 +3657,17 @@ impl Layout {
         return self
     }
 
-    fun description(self, value: String) -> Layout {
+    fun description(self, value: str) -> Layout {
         self.description = value
         return self
     }
 
-    fun lang(self, value: String) -> Layout {
+    fun lang(self, value: str) -> Layout {
         self.language = value
         return self
     }
 
-    fun wrap(self, title: String, body: Node) -> Page {
+    fun wrap(self, title: str, body: Node) -> Page {
         let shell = Node.fragment().child(self.header).child(body).child(self.footer)
         return Page.new(title, shell).lang(self.language).description(self.description).with_styles(
             self.styles,
@@ -3662,32 +3675,32 @@ impl Layout {
     }
 }
 
-struct Route {
-    path: String,
-    page: Page,
+class Route {
+    path: str
+    page: Page
     // W3C date ("2026-07-16") for the sitemap's lastmod; empty means omitted.
-    lastmod: String,
+    lastmod: str
 }
 
-struct SiteOutput {
-    directory: String,
-    routes: List<String>,
+class SiteOutput {
+    directory: str
+    routes: list[str]
 }
 
 impl SiteOutput {
-    fun directory(self) -> String {
+    fun directory(self) -> str {
         return self.directory
     }
 
-    fun routes(self) -> List<String> {
+    fun routes(self) -> list[str] {
         return self.routes
     }
 
-    fun page_count(self) -> Int {
+    fun page_count(self) -> int {
         return self.routes.len()
     }
 
-    fun contains(self, path: String) -> Bool {
+    fun contains(self, path: str) -> bool {
         for item in self.routes {
             if item == path {
                 return true
@@ -3700,14 +3713,14 @@ impl SiteOutput {
 // A set of routes written as a static site. Each route becomes a clean-URL
 // directory (`/about` to `about/index.html`); write_static also emits a
 // sitemap.xml and a 404.html.
-struct Site {
-    base_url: String,
-    routes: List<Route>,
-    missing: Option<Page>,
+class Site {
+    base_url: str
+    routes: list[Route]
+    missing: Option[Page]
 }
 
-fun _normalize_route(path: String) -> String {
-    let p = path.trim()
+fun _normalize_route(path: str) -> str {
+    var p = path.trim()
     while p.starts_with("/") {
         p = p.substring(1, p.length())
     }
@@ -3717,8 +3730,8 @@ fun _normalize_route(path: String) -> String {
     return p
 }
 
-fun _join_url(base: String, path: String) -> String {
-    let b = base
+fun _join_url(base: str, path: str) -> str {
+    var b = base
     while b.ends_with("/") {
         b = b.substring(0, b.length() - 1)
     }
@@ -3730,15 +3743,15 @@ fun _join_url(base: String, path: String) -> String {
 
 // A W3C sitemap date: digits and hyphens shaped like 2026-07-16 (a full
 // datetime also passes: digits, hyphens, colons, T, Z, plus, dot).
-fun _valid_w3c_date(value: String) -> Bool {
+fun _valid_w3c_date(value: str) -> bool {
     if value.length() < 10 {
         return false
     }
-    let i = 0
+    var i = 0
     while i < value.length() {
         let b = value.byte_at(i)
-        let ok = (b >= 48 && b <= 57) || b == 45 || b == 58 || b == 84 || b == 90 || b == 43 || b == 46
-        if !ok {
+        let ok = (b >= 48 and b <= 57) or b == 45 or b == 58 or b == 84 or b == 90 or b == 43 or b == 46
+        if not ok {
             return false
         }
         i += 1
@@ -3755,9 +3768,9 @@ fun _default_not_found() -> Page {
     )
 }
 
-fun _sitemap(base_url: String, routes: List<Route>) -> String {
+fun _sitemap(base_url: str, routes: list[Route]) -> str {
     let q = _quote()
-    let out = "<?xml version=".concat(q).concat("1.0").concat(q).concat(" encoding=").concat(q).concat(
+    var out = "<?xml version=".concat(q).concat("1.0").concat(q).concat(" encoding=").concat(q).concat(
         "UTF-8",
     ).concat(q).concat("?>")
     out = out.concat("<urlset xmlns=").concat(q).concat(
@@ -3776,23 +3789,23 @@ fun _sitemap(base_url: String, routes: List<Route>) -> String {
 }
 
 impl Site {
-    fun new(base_url: String) -> Site {
-        let routes: List<Route> = []
-        return Site { base_url, routes, missing: None }
+    fun new(base_url: str) -> Site {
+        let routes: list[Route] = []
+        return Site(base_url: base_url, routes: routes, missing: None)
     }
 
-    fun page(self, path: String, page: Page) -> Site {
-        self.routes.push(Route { path: _normalize_route(path), page, lastmod: "" })
+    fun page(self, path: str, page: Page) -> Site {
+        self.routes.push(Route(path: _normalize_route(path), page: page, lastmod: ""))
         return self
     }
 
     // Stamp the route added most recently with a last-modified date for the
     // sitemap: site.page("/blog/hello", post).lastmod("2026-07-16").
-    fun lastmod(self, date: String) -> Site {
+    fun lastmod(self, date: str) -> Site {
         if self.routes.len() == 0 {
             return self
         }
-        if !_valid_w3c_date(date) {
+        if not _valid_w3c_date(date) {
             return self
         }
         let last = self.routes.get(self.routes.len() - 1)
@@ -3805,40 +3818,32 @@ impl Site {
         return self
     }
 
-    fun write_static(self, dir: String) -> Result<SiteOutput, Error> {
+    fun write_static(self, dir: str) -> Result[SiteOutput, Error] {
         let _created = create_dir_all(dir)?
-        let written: List<String> = []
+        let written: list[str] = []
         for route in self.routes {
-            let target = if route.path == "" {
-                dir
-            } else {
-                join(dir, route.path)
-            }
+            let target = dir if route.path == "" else join(dir, route.path)
             let _out = route.page.write_static(target)?
-            if route.path == "" {
-                written.push("/")
-            } else {
-                written.push("/".concat(route.path).concat("/"))
-            }
+            written.push("/") if route.path == "" else written.push("/".concat(route.path).concat("/"))
         }
         let _map = write(join(dir, "sitemap.xml"), _sitemap(self.base_url, self.routes))?
         let not_found = match self.missing {
-            Some(page) -> page,
-            None -> _default_not_found(),
+            case Some(page) { page }
+            case None { _default_not_found() }
         }
         let _nf = write(join(dir, "404.html"), not_found.html())?
-        return Ok(SiteOutput { directory: dir, routes: written })
+        return Ok(SiteOutput(directory: dir, routes: written))
     }
 }
 
 // A client route: the pattern that selects it and the view it shows. A guard
 // names a signal that must be truthy, and where to send the visitor if it is
 // not.
-struct RouteView {
-    pattern: String,
-    view: Node,
-    guard_key: String,
-    guard_to: String,
+class RouteView {
+    pattern: str
+    view: Node
+    guard_key: str
+    guard_to: str
 }
 
 // A client-side router. Every route's view is rendered once at build time; the
@@ -3854,26 +3859,26 @@ struct RouteView {
 //
 // A pattern segment written `:name` matches one segment and binds it, readable
 // as `router.param("name")`. Params live under the reserved state key `route`.
-struct Router {
-    routes: List<RouteView>,
-    missing: Option<Node>,
+class Router {
+    routes: list[RouteView]
+    missing: Option[Node]
     // Dropped routes and guards, carried into the Node built by to_node().
-    warnings: List<String>,
+    warnings: list[str]
 }
 
 impl Router {
     fun new() -> Router {
-        let routes: List<RouteView> = []
-        let warnings: List<String> = []
-        return Router { routes, missing: None, warnings }
+        let routes: list[RouteView] = []
+        let warnings: list[str] = []
+        return Router(routes: routes, missing: None, warnings: warnings)
     }
 
     // Add a route. An invalid pattern is dropped, like every other builder here;
     // try_route reports it instead.
-    fun route(self, pattern: String, view: Node) -> Router {
+    fun route(self, pattern: str, view: Node) -> Router {
         if _valid_route_pattern(pattern) {
             self.routes.push(
-                RouteView { pattern: _normalize_path(pattern), view, guard_key: "", guard_to: "" },
+                RouteView(pattern: _normalize_path(pattern), view: view, guard_key: "", guard_to: ""),
             )
         } else {
             self.warnings.push(
@@ -3885,8 +3890,8 @@ impl Router {
         return self
     }
 
-    fun try_route(self, pattern: String, view: Node) -> Result<Router, String> {
-        if !_valid_route_pattern(pattern) {
+    fun try_route(self, pattern: str, view: Node) -> Result[Router, str] {
+        if not _valid_route_pattern(pattern) {
             return Err("invalid route pattern: ".concat(pattern))
         }
         return Ok(self.route(pattern, view))
@@ -3896,12 +3901,12 @@ impl Router {
     // matches, the runtime redirects to `redirect_to` instead of showing it.
     // This is a convenience, not a security boundary; the data still has to be
     // protected by the server.
-    fun requires(self, source: Signal, redirect_to: String) -> Router {
+    fun requires(self, source: Signal, redirect_to: str) -> Router {
         if self.routes.len() == 0 {
             self.warnings.push("dropped guard: requires() was called before any route")
             return self
         }
-        if !_valid_route_pattern(redirect_to) {
+        if not _valid_route_pattern(redirect_to) {
             self.warnings.push("dropped guard: invalid redirect path ".concat(_quote_word(redirect_to)))
             return self
         }
@@ -3917,16 +3922,16 @@ impl Router {
     }
 
     // A route parameter, read like any other signal.
-    fun param(self, name: String) -> Signal {
-        return Signal { key: "route", path: "route.".concat(name), initial: "", raw: false }
+    fun param(self, name: str) -> Signal {
+        return Signal(key: "route", path: "route.".concat(name), initial: "", raw: false)
     }
 
     // A query-string parameter (?tab=general), read like any other signal.
-    fun query(self, name: String) -> Signal {
+    fun query(self, name: str) -> Signal {
         return query_param(name)
     }
 
-    fun route_count(self) -> Int {
+    fun route_count(self) -> int {
         return self.routes.len()
     }
 
@@ -3952,20 +3957,20 @@ impl Router {
             let _ = out.child(holder)
         }
         match self.missing {
-            Some(view) -> {
+            case Some(view) {
                 let _ = out.child(
                     Node.div().attr("data-rw-route", "*").attr("hidden", "hidden").attr("tabindex", "-1").child(
                         view,
                     ),
                 )
-            },
-            None -> {},
+            }
+            case None {}
         }
         return out
     }
 }
 
-fun _guard_json(key: String, to: String) -> String {
+fun _guard_json(key: str, to: str) -> str {
     return "{".concat(_js_string("k")).concat(":").concat(_js_string(key)).concat(",").concat(
         _js_string("to"),
     ).concat(":").concat(_js_string(to)).concat("}")
@@ -3975,66 +3980,66 @@ fun _guard_json(key: String, to: String) -> String {
 // reserved state key "query", parsed by the runtime on load and on every
 // navigation, so bindings react to them like any other state. Works with or
 // without a Router.
-fun query_param(name: String) -> Signal {
-    return Signal { key: "query", path: "query.".concat(name), initial: "", raw: false }
+fun query_param(name: str) -> Signal {
+    return Signal(key: "query", path: "query.".concat(name), initial: "", raw: false)
 }
 
 // Router paths keep their leading slash (they are matched against
 // location.pathname) and drop a trailing one, so "/about/" and "/about" are the
 // same route. "/" is left alone.
-fun _normalize_path(path: String) -> String {
-    let p = path.trim()
-    if !p.starts_with("/") {
+fun _normalize_path(path: str) -> str {
+    var p = path.trim()
+    if not p.starts_with("/") {
         p = "/".concat(p)
     }
-    while p.ends_with("/") && p.length() > 1 {
+    while p.ends_with("/") and p.length() > 1 {
         p = p.substring(0, p.length() - 1)
     }
     return p
 }
 
 // A pattern is an absolute path of literal segments and `:name` captures.
-fun _valid_route_pattern(pattern: String) -> Bool {
-    if !pattern.starts_with("/") || pattern.length() > 512 {
+fun _valid_route_pattern(pattern: str) -> bool {
+    if not pattern.starts_with("/") or pattern.length() > 512 {
         return false
     }
-    if pattern.contains(" ") || pattern.contains("\"") || pattern.contains("<") || pattern.contains(
-        ">",
-    ) || pattern.contains("?") || pattern.contains("#") {
+    if pattern.contains(" ") or pattern.contains("\"") or pattern.contains("<") or pattern.contains(">") or pattern.contains(
+        "?",
+    ) or pattern.contains("#") {
         return false
     }
     for segment in pattern.split("/") {
-        if segment.starts_with(":") && segment.length() < 2 {
+        if segment.starts_with(":") and segment.length() < 2 {
             return false
         }
     }
     return true
 }
 
-struct ThemeToken {
-    name: String,
-    light: String,
-    dark: String,
+class ThemeToken {
+    name: str
+    light: str
+    dark: str
 }
 
 // A design-token theme. Tokens are emitted as CSS custom properties so authors
 // reference var(--color-bg) instead of hand-writing color strings. Light values
 // are the default; dark values apply under prefers-color-scheme and under an
 // explicit data-theme attribute (which a Behavior can set for a manual toggle).
-struct Theme {
-    tokens: List<ThemeToken>,
+class Theme {
+    tokens: list[ThemeToken]
     // Dropped tokens, carried into the Stylesheet built by stylesheet().
-    warnings: List<String>,
+    warnings: list[str]
 }
 
-fun _valid_token_name(name: String) -> Bool {
-    if name.length() == 0 || !_ascii_letter(name.byte_at(0)) {
+fun _valid_token_name(name: str) -> bool {
+    if name.length() == 0 or not _ascii_letter(name.byte_at(0)) {
         return false
     }
-    let i = 1
+    var i = 1
     while i < name.length() {
         let b = name.byte_at(i)
-        if !_ascii_letter(b) && !(b >= 48 && b <= 57) && b != 45 {
+        if not _ascii_letter(b) and not (b >= 48 and b <= 57) and b != 45 {
             return false
         }
         i += 1
@@ -4042,23 +4047,19 @@ fun _valid_token_name(name: String) -> Bool {
     return true
 }
 
-fun _theme_vars(tokens: List<ThemeToken>, use_dark: Bool) -> String {
-    let out = ""
+fun _theme_vars(tokens: list[ThemeToken], use_dark: bool) -> str {
+    var out = ""
     for token in tokens {
-        let value = if use_dark {
-            token.dark
-        } else {
-            token.light
-        }
+        let value = token.dark if use_dark else token.light
         out = out.concat("--").concat(token.name).concat(":").concat(value).concat(";")
     }
     return out
 }
 
 fun theme() -> Theme {
-    let tokens: List<ThemeToken> = []
-    let warnings: List<String> = []
-    return Theme { tokens, warnings }
+    let tokens: list[ThemeToken] = []
+    let warnings: list[str] = []
+    return Theme(tokens: tokens, warnings: warnings)
 }
 
 impl Theme {
@@ -4067,33 +4068,33 @@ impl Theme {
     }
 
     // A raw design token, emitted as the custom property --<name>.
-    fun token(self, name: String, light: String, dark: String) -> Theme {
-        if !_valid_token_name(name) {
+    fun token(self, name: str, light: str, dark: str) -> Theme {
+        if not _valid_token_name(name) {
             self.warnings.push("dropped theme token: invalid name ".concat(_quote_word(name)))
             return self
         }
-        if !_css_safe_text(light) || !_css_safe_text(dark) {
+        if not _css_safe_text(light) or not _css_safe_text(dark) {
             self.warnings.push("dropped theme token ".concat(_quote_word(name)).concat(": invalid value"))
             return self
         }
-        self.tokens.push(ThemeToken { name, light, dark })
+        self.tokens.push(ThemeToken(name: name, light: light, dark: dark))
         return self
     }
 
     // A color token, prefixed color- by convention: color("bg", ...) is --color-bg.
-    fun color(self, name: String, light: String, dark: String) -> Theme {
+    fun color(self, name: str, light: str, dark: str) -> Theme {
         return self.token("color-".concat(name), light, dark)
     }
 
     // A mode-independent token (spacing, radius, type scale).
-    fun scale(self, name: String, value: String) -> Theme {
+    fun scale(self, name: str, value: str) -> Theme {
         return self.token(name, value, value)
     }
 
-    fun css(self) -> String {
+    fun css(self) -> str {
         let light = _theme_vars(self.tokens, false)
         let dark = _theme_vars(self.tokens, true)
-        let out = ":root{".concat(light).concat("}")
+        var out = ":root{".concat(light).concat("}")
         out = out.concat("@media (prefers-color-scheme:dark){:root{").concat(dark).concat("}}")
         out = out.concat(":root[data-theme=dark]{").concat(dark).concat("}")
         return out.concat(":root[data-theme=light]{").concat(light).concat("}")
@@ -4121,19 +4122,19 @@ impl Theme {
 
 // One content file: frontmatter keys, the body below them, and where it
 // came from. `slug` is the file name without its extension.
-struct Document {
-    slug: String,
-    path: String,
-    meta: Map<String, String>,
-    body: String,
+class Document {
+    slug: str
+    path: str
+    meta: dict[str, str]
+    body: str
 }
 
 impl Document {
-    fun get(self, key: String) -> String {
+    fun get(self, key: str) -> str {
         return self.meta.get_or(key, "")
     }
 
-    fun get_or(self, key: String, default: String) -> String {
+    fun get_or(self, key: str, default: str) -> str {
         return self.meta.get_or(key, default)
     }
 
@@ -4143,9 +4144,9 @@ impl Document {
     }
 }
 
-fun _strip_value_quotes(value: String) -> String {
+fun _strip_value_quotes(value: str) -> str {
     let v = value.trim()
-    if v.length() >= 2 && v.byte_at(0) == 34 && v.byte_at(v.length() - 1) == 34 {
+    if v.length() >= 2 and v.byte_at(0) == 34 and v.byte_at(v.length() - 1) == 34 {
         return v.substring(1, v.length() - 1)
     }
     return v
@@ -4154,14 +4155,14 @@ fun _strip_value_quotes(value: String) -> String {
 // Parse a document with optional frontmatter: a leading "---" line, then
 // "key: value" lines (split at the first colon, so values may contain
 // colons), then a closing "---". No nesting; one string value per key.
-fun parse_document(source: String) -> Document {
-    let meta: Map<String, String> = Map.new()
+fun parse_document(source: str) -> Document {
+    let meta: dict[str, str] = Map.new()
     let lines = source.split("\n")
-    if lines.len() == 0 || lines.get(0).trim() != "---" {
-        return Document { slug: "", path: "", meta, body: source }
+    if lines.len() == 0 or lines.get(0).trim() != "---" {
+        return Document(slug: "", path: "", meta: meta, body: source)
     }
-    let i = 1
-    while i < lines.len() && lines.get(i).trim() != "---" {
+    var i = 1
+    while i < lines.len() and lines.get(i).trim() != "---" {
         let line = lines.get(i)
         let sep = line.index_of(":")
         if sep > 0 {
@@ -4176,11 +4177,11 @@ fun parse_document(source: String) -> Document {
     if i >= lines.len() {
         // No closing fence: the whole file was a would-be header. Treat the
         // source as body so nothing silently disappears.
-        let empty: Map<String, String> = Map.new()
-        return Document { slug: "", path: "", meta: empty, body: source }
+        let empty: dict[str, str] = Map.new()
+        return Document(slug: "", path: "", meta: empty, body: source)
     }
-    let body = ""
-    let j = i + 1
+    var body = ""
+    var j = i + 1
     while j < lines.len() {
         if body != "" {
             body = body.concat("\n")
@@ -4188,10 +4189,10 @@ fun parse_document(source: String) -> Document {
         body = body.concat(lines.get(j))
         j += 1
     }
-    return Document { slug: "", path: "", meta, body }
+    return Document(slug: "", path: "", meta: meta, body: body)
 }
 
-fun _doc_slug(path: String) -> String {
+fun _doc_slug(path: str) -> str {
     let name = basename(path)
     if name.to_lower().ends_with(".md") {
         return name.substring(0, name.length() - 3)
@@ -4201,45 +4202,45 @@ fun _doc_slug(path: String) -> String {
 
 // Every .md file under `dir`, parsed, in walk order. Unreadable files are
 // skipped; sort with sort_documents_desc for newest-first content.
-fun load_documents(dir: String) -> List<Document> {
-    let out: List<Document> = []
+fun load_documents(dir: str) -> list[Document] {
+    let out: list[Document] = []
     match walk(dir) {
-        Ok(entries) -> {
+        case Ok(entries) {
             for entry in entries {
                 if entry.to_lower().ends_with(".md") {
                     match read(entry) {
-                        Ok(text) -> {
+                        case Ok(text) {
                             let doc = parse_document(text)
                             doc.path = entry
                             doc.slug = _doc_slug(entry)
                             out.push(doc)
-                        },
-                        Err(_) -> {},
+                        }
+                        case Err(_) {}
                     }
                 }
             }
-        },
-        Err(_) -> {},
+        }
+        case Err(_) {}
     }
     return out
 }
 
 // Sorted by a frontmatter key, descending, so ISO dates come newest first.
 // Insertion sort: content lists are small and this keeps ties stable.
-fun sort_documents_desc(docs: List<Document>, key: String) -> List<Document> {
-    let out: List<Document> = []
+fun sort_documents_desc(docs: list[Document], key: str) -> list[Document] {
+    var out: list[Document] = []
     for doc in docs {
         let value = doc.get(key)
-        let inserted = false
-        let result: List<Document> = []
+        var inserted = false
+        let result: list[Document] = []
         for existing in out {
-            if !inserted && existing.get(key) < value {
+            if not inserted and existing.get(key) < value {
                 result.push(doc)
                 inserted = true
             }
             result.push(existing)
         }
-        if !inserted {
+        if not inserted {
             result.push(doc)
         }
         out = result
@@ -4249,18 +4250,18 @@ fun sort_documents_desc(docs: List<Document>, key: String) -> List<Document> {
 
 // items split into pages of `size`, for pagination. A non-positive size
 // yields a single page.
-fun chunks<T>(items: List<T>, size: Int) -> List<List<T>> {
-    let out: List<List<T>> = []
+fun chunks[T](items: list[T], size: int) -> list[list[T]] {
+    let out: list[list[T]] = []
     if size <= 0 {
         out.push(items)
         return out
     }
-    let current: List<T> = []
+    var current: list[T] = []
     for item in items {
         current.push(item)
         if current.len() == size {
             out.push(current)
-            let next: List<T> = []
+            let next: list[T] = []
             current = next
         }
     }
@@ -4272,21 +4273,21 @@ fun chunks<T>(items: List<T>, size: Int) -> List<List<T>> {
 
 // ----- markdown -----
 
-fun markdown(source: String) -> Node {
+fun markdown(source: str) -> Node {
     let out = Node.fragment()
     let lines = source.split("\n")
-    let i = 0
+    var i = 0
     while i < lines.len() {
         i = _md_block(out, lines, i)
     }
     return out
 }
 
-fun _md_all(text: String, b: Int) -> Bool {
+fun _md_all(text: str, b: int) -> bool {
     if text.length() == 0 {
         return false
     }
-    let i = 0
+    var i = 0
     while i < text.length() {
         if text.byte_at(i) != b {
             return false
@@ -4296,35 +4297,35 @@ fun _md_all(text: String, b: Int) -> Bool {
     return true
 }
 
-fun _md_is_fence(line: String) -> Bool {
+fun _md_is_fence(line: str) -> bool {
     let t = line.trim()
-    return t.length() >= 3 && t.byte_at(0) == 96 && t.byte_at(1) == 96 && t.byte_at(2) == 96
+    return t.length() >= 3 and t.byte_at(0) == 96 and t.byte_at(1) == 96 and t.byte_at(2) == 96
 }
 
-fun _md_is_bullet(line: String) -> Bool {
-    return line.starts_with("- ") || line.starts_with("* ")
+fun _md_is_bullet(line: str) -> bool {
+    return line.starts_with("- ") or line.starts_with("* ")
 }
 
-fun _md_ordered_marker(line: String) -> Int {
-    let i = 0
-    while i < line.length() && line.byte_at(i) >= 48 && line.byte_at(i) <= 57 {
+fun _md_ordered_marker(line: str) -> int {
+    var i = 0
+    while i < line.length() and line.byte_at(i) >= 48 and line.byte_at(i) <= 57 {
         i += 1
     }
-    if i == 0 || i + 1 >= line.length() {
+    if i == 0 or i + 1 >= line.length() {
         return -1
     }
-    if line.byte_at(i) == 46 && line.byte_at(i + 1) == 32 {
+    if line.byte_at(i) == 46 and line.byte_at(i + 1) == 32 {
         return i + 2
     }
     return -1
 }
 
-fun _md_heading_level(line: String) -> Int {
-    let i = 0
-    while i < line.length() && line.byte_at(i) == 35 {
+fun _md_heading_level(line: str) -> int {
+    var i = 0
+    while i < line.length() and line.byte_at(i) == 35 {
         i += 1
     }
-    if i >= 1 && i <= 6 && i < line.length() && line.byte_at(i) == 32 {
+    if i >= 1 and i <= 6 and i < line.length() and line.byte_at(i) == 32 {
         return i
     }
     return 0
@@ -4332,7 +4333,7 @@ fun _md_heading_level(line: String) -> Int {
 
 // Parse one block starting at `i`; append it to `out`; return the next line
 // index. Always advances.
-fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
+fun _md_block(out: Node, lines: list[str], i: int) -> int {
     let line = lines.get(i)
     let t = line.trim()
     if t == "" {
@@ -4354,14 +4355,14 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
     }
     if _md_is_fence(line) {
         let info = line.trim().substring(3, line.trim().length()).trim()
-        let body = ""
-        let j = i + 1
-        while j < lines.len() && !_md_is_fence(lines.get(j)) {
+        var body = ""
+        var j = i + 1
+        while j < lines.len() and not _md_is_fence(lines.get(j)) {
             body = body.concat(lines.get(j)).concat("\n")
             j += 1
         }
         let code = Node.code()
-        if info != "" && _valid_class_token("language-".concat(info)) {
+        if info != "" and _valid_class_token("language-".concat(info)) {
             let _ = code.class_name("language-".concat(info))
         }
         let cfg = _hl_config(info)
@@ -4371,21 +4372,17 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
             let _ = code.child_text(body)
         }
         let _ = out.child(Node.pre().child(code))
-        return if j < lines.len() {
-            j + 1
-        } else {
-            j
-        }
+        return j + 1 if j < lines.len() else j
     }
-    if _md_all(t, 45) || _md_all(t, 42) {
+    if _md_all(t, 45) or _md_all(t, 42) {
         let _ = out.child(Node.hr())
         return i + 1
     }
     if t.starts_with(">") {
-        let inner = ""
-        let j = i
-        while j < lines.len() && lines.get(j).trim().starts_with(">") {
-            let stripped = lines.get(j).trim().substring(1, lines.get(j).trim().length())
+        var inner = ""
+        var j = i
+        while j < lines.len() and lines.get(j).trim().starts_with(">") {
+            var stripped = lines.get(j).trim().substring(1, lines.get(j).trim().length())
             if stripped.starts_with(" ") {
                 stripped = stripped.substring(1, stripped.length())
             }
@@ -4400,8 +4397,8 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
     }
     if _md_is_bullet(line) {
         let list = Node.ul()
-        let j = i
-        while j < lines.len() && _md_is_bullet(lines.get(j)) {
+        var j = i
+        while j < lines.len() and _md_is_bullet(lines.get(j)) {
             let item = Node.li()
             _md_inline(item, lines.get(j).substring(2, lines.get(j).length()).trim())
             let _ = list.child(item)
@@ -4412,8 +4409,8 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
     }
     if _md_ordered_marker(line) > 0 {
         let list = Node.ol()
-        let j = i
-        while j < lines.len() && _md_ordered_marker(lines.get(j)) > 0 {
+        var j = i
+        while j < lines.len() and _md_ordered_marker(lines.get(j)) > 0 {
             let start = _md_ordered_marker(lines.get(j))
             let item = Node.li()
             _md_inline(item, lines.get(j).substring(start, lines.get(j).length()).trim())
@@ -4424,15 +4421,18 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
         return j
     }
     // Paragraph: consecutive plain lines join with spaces.
-    let text = t
-    let j = i + 1
+    var text = t
+    var j = i + 1
     while j < lines.len() {
         let peek = lines.get(j)
         let pt = peek.trim()
-        let plain = pt != "" && _md_heading_level(pt) == 0 && !_md_is_fence(peek) && !_md_is_bullet(
+        let plain = pt != "" and _md_heading_level(pt) == 0 and not _md_is_fence(peek) and not _md_is_bullet(
             peek,
-        ) && _md_ordered_marker(peek) < 0 && !pt.starts_with(">") && !_md_all(pt, 45) && !_md_all(pt, 42)
-        if !plain {
+        ) and _md_ordered_marker(peek) < 0 and not pt.starts_with(">") and not _md_all(pt, 45) and not _md_all(
+            pt,
+            42,
+        )
+        if not plain {
             break
         }
         text = text.concat(" ").concat(pt)
@@ -4444,8 +4444,8 @@ fun _md_block(out: Node, lines: List<String>, i: Int) -> Int {
     return j
 }
 
-fun _md_find_byte(text: String, b: Int, from: Int) -> Int {
-    let i = from
+fun _md_find_byte(text: str, b: int, from: int) -> int {
+    var i = from
     while i < text.length() {
         if text.byte_at(i) == b {
             return i
@@ -4455,10 +4455,10 @@ fun _md_find_byte(text: String, b: Int, from: Int) -> Int {
     return -1
 }
 
-fun _md_find_double_star(text: String, from: Int) -> Int {
-    let i = from
+fun _md_find_double_star(text: str, from: int) -> int {
+    var i = from
     while i + 1 < text.length() {
-        if text.byte_at(i) == 42 && text.byte_at(i + 1) == 42 {
+        if text.byte_at(i) == 42 and text.byte_at(i + 1) == 42 {
             return i
         }
         i += 1
@@ -4466,7 +4466,7 @@ fun _md_find_double_star(text: String, from: Int) -> Int {
     return -1
 }
 
-fun _md_flush(target: Node, buf: String) -> String {
+fun _md_flush(target: Node, buf: str) -> str {
     if buf != "" {
         target.kids.push(Node.text(buf))
     }
@@ -4474,40 +4474,40 @@ fun _md_flush(target: Node, buf: String) -> String {
 }
 
 // A parsed [label](url) shape at `open` (the bracket's index), or ok=false.
-struct MdLink {
-    ok: Bool,
-    label: String,
-    url: String,
-    next: Int,
+class MdLink {
+    ok: bool
+    label: str
+    url: str
+    next: int
 }
 
-fun _md_link_at(text: String, open: Int) -> MdLink {
+fun _md_link_at(text: str, open: int) -> MdLink {
     let close = _md_find_byte(text, 93, open + 1)
-    if close < 0 || close + 1 >= text.length() || text.byte_at(close + 1) != 40 {
-        return MdLink { ok: false, label: "", url: "", next: open }
+    if close < 0 or close + 1 >= text.length() or text.byte_at(close + 1) != 40 {
+        return MdLink(ok: false, label: "", url: "", next: open)
     }
     let finish = _md_find_byte(text, 41, close + 2)
     if finish < 0 {
-        return MdLink { ok: false, label: "", url: "", next: open }
+        return MdLink(ok: false, label: "", url: "", next: open)
     }
-    return MdLink {
+    return MdLink(
         ok: true,
         label: text.substring(open + 1, close),
         url: text.substring(close + 2, finish).trim(),
         next: finish + 1,
-    }
+    )
 }
 
 // Inline markdown into `target`: emphasis, strong, code spans, links,
 // images, backslash escapes. Unmatched markers fall through as literal
 // text rather than vanishing.
-fun _md_inline(target: Node, text: String) {
-    let buf = ""
-    let i = 0
+fun _md_inline(target: Node, text: str) {
+    var buf = ""
+    var i = 0
     let n = text.length()
     while i < n {
         let b = text.byte_at(i)
-        if b == 92 && i + 1 < n {
+        if b == 92 and i + 1 < n {
             buf = buf.concat(text.substring(i + 1, i + 2))
             i += 2
         } else if b == 96 {
@@ -4520,7 +4520,7 @@ fun _md_inline(target: Node, text: String) {
                 let _ = target.child(Node.code().child_text(text.substring(i + 1, close)))
                 i = close + 1
             }
-        } else if b == 42 && i + 1 < n && text.byte_at(i + 1) == 42 {
+        } else if b == 42 and i + 1 < n and text.byte_at(i + 1) == 42 {
             let close = _md_find_double_star(text, i + 2)
             if close < 0 {
                 buf = buf.concat("**")
@@ -4544,7 +4544,7 @@ fun _md_inline(target: Node, text: String) {
                 let _ = target.child(em)
                 i = close + 1
             }
-        } else if b == 33 && i + 1 < n && text.byte_at(i + 1) == 91 {
+        } else if b == 33 and i + 1 < n and text.byte_at(i + 1) == 91 {
             let link = _md_link_at(text, i + 1)
             if link.ok {
                 buf = _md_flush(target, buf)
@@ -4578,14 +4578,14 @@ fun _md_inline(target: Node, text: String) {
 
 // One Atom entry. `date` is an ISO date ("2026-07-16") or full RFC 3339
 // timestamp; a bare date gains midnight UTC on the way out.
-struct FeedEntry {
-    title: String,
-    url: String,
-    date: String,
-    summary: String,
+class FeedEntry {
+    title: str
+    url: str
+    date: str
+    summary: str
 }
 
-fun _rfc3339(date: String) -> String {
+fun _rfc3339(date: str) -> str {
     if date.length() == 10 {
         return date.concat("T00:00:00Z")
     }
@@ -4595,14 +4595,14 @@ fun _rfc3339(date: String) -> String {
 // An Atom feed (RFC 4287), which takes the same ISO dates frontmatter uses.
 // Serve it via Page.file: page.file(StaticFile.new("feed.xml", atom_feed(...))).
 fun atom_feed(
-    title: String,
-    site_url: String,
-    feed_url: String,
-    updated: String,
-    entries: List<FeedEntry>,
-) -> String {
+    title: str,
+    site_url: str,
+    feed_url: str,
+    updated: str,
+    entries: list[FeedEntry],
+) -> str {
     let q = _quote()
-    let out = "<?xml version=".concat(q).concat("1.0").concat(q).concat(" encoding=").concat(q).concat(
+    var out = "<?xml version=".concat(q).concat("1.0").concat(q).concat(" encoding=").concat(q).concat(
         "UTF-8",
     ).concat(q).concat("?>")
     out = out.concat("<feed xmlns=").concat(q).concat("http://www.w3.org/2005/Atom").concat(q).concat(
@@ -4647,34 +4647,41 @@ fun syntax_styles() -> Stylesheet {
 }
 
 // How to tokenize one language.
-struct HlConfig {
-    known: Bool,
-    slash: Bool,
-    hash: Bool,
-    block: Bool,
-    backtick: Bool,
-    keywords: List<String>,
+class HlConfig {
+    known: bool
+    slash: bool
+    hash: bool
+    block: bool
+    backtick: bool
+    keywords: list[str]
 }
 
 fun _hl_none() -> HlConfig {
-    let kw: List<String> = []
-    return HlConfig {
+    let kw: list[str] = []
+    return HlConfig(
         known: false,
         slash: false,
         hash: false,
         block: false,
         backtick: false,
         keywords: kw,
-    }
+    )
 }
 
-fun _hl_c_family(keywords: List<String>, backtick: Bool) -> HlConfig {
-    return HlConfig { known: true, slash: true, hash: false, block: true, backtick, keywords }
+fun _hl_c_family(keywords: list[str], backtick: bool) -> HlConfig {
+    return HlConfig(
+        known: true,
+        slash: true,
+        hash: false,
+        block: true,
+        backtick: backtick,
+        keywords: keywords,
+    )
 }
 
-fun _hl_config(lang: String) -> HlConfig {
+fun _hl_config(lang: str) -> HlConfig {
     let l = lang.to_lower()
-    if l == "raven" || l == "rv" {
+    if l == "raven" or l == "rv" {
         return _hl_c_family(
             [
                 "fun",
@@ -4703,7 +4710,7 @@ fun _hl_config(lang: String) -> HlConfig {
             false,
         )
     }
-    if l == "rust" || l == "rs" {
+    if l == "rust" or l == "rs" {
         return _hl_c_family(
             [
                 "fn",
@@ -4737,7 +4744,7 @@ fun _hl_config(lang: String) -> HlConfig {
             false,
         )
     }
-    if l == "js" || l == "javascript" || l == "ts" || l == "typescript" {
+    if l == "js" or l == "javascript" or l == "ts" or l == "typescript" {
         return _hl_c_family(
             [
                 "function",
@@ -4802,7 +4809,7 @@ fun _hl_config(lang: String) -> HlConfig {
             true,
         )
     }
-    if l == "c" || l == "cpp" || l == "c++" || l == "java" {
+    if l == "c" or l == "cpp" or l == "c++" or l == "java" {
         return _hl_c_family(
             [
                 "int",
@@ -4830,8 +4837,8 @@ fun _hl_config(lang: String) -> HlConfig {
             false,
         )
     }
-    if l == "python" || l == "py" {
-        return HlConfig {
+    if l == "python" or l == "py" {
+        return HlConfig(
             known: true,
             slash: false,
             hash: true,
@@ -4866,10 +4873,10 @@ fun _hl_config(lang: String) -> HlConfig {
                 "async",
                 "await",
             ],
-        }
+        )
     }
-    if l == "bash" || l == "sh" || l == "shell" {
-        return HlConfig {
+    if l == "bash" or l == "sh" or l == "shell" {
+        return HlConfig(
             known: true,
             slash: false,
             hash: true,
@@ -4893,16 +4900,16 @@ fun _hl_config(lang: String) -> HlConfig {
                 "export",
                 "local",
             ],
-        }
+        )
     }
     return _hl_none()
 }
 
-fun _hl_word_char(b: Int) -> Bool {
-    return _ascii_letter(b) || (b >= 48 && b <= 57) || b == 95
+fun _hl_word_char(b: int) -> bool {
+    return _ascii_letter(b) or (b >= 48 and b <= 57) or b == 95
 }
 
-fun _hl_is_keyword(word: String, keywords: List<String>) -> Bool {
+fun _hl_is_keyword(word: str, keywords: list[str]) -> bool {
     for kw in keywords {
         if kw == word {
             return true
@@ -4911,7 +4918,7 @@ fun _hl_is_keyword(word: String, keywords: List<String>) -> Bool {
     return false
 }
 
-fun _hl_span(code: Node, cls: String, text: String) {
+fun _hl_span(code: Node, cls: str, text: str) {
     let _ = code.child(Node.span().class_name(cls).child_text(text))
 }
 
@@ -4919,20 +4926,20 @@ fun _hl_span(code: Node, cls: String, text: String) {
 // keywords become classed spans; everything else is escaped text. All text,
 // span or plain, passes through the escaping builders, so highlighting can
 // never inject markup.
-fun _highlight_into(code: Node, source: String, cfg: HlConfig) {
-    let buf = ""
-    let i = 0
+fun _highlight_into(code: Node, source: str, cfg: HlConfig) {
+    var buf = ""
+    var i = 0
     let n = source.length()
     while i < n {
         let b = source.byte_at(i)
-        if cfg.block && b == 47 && i + 1 < n && source.byte_at(i + 1) == 42 {
+        if cfg.block and b == 47 and i + 1 < n and source.byte_at(i + 1) == 42 {
             if buf != "" {
                 let _ = code.child_text(buf)
                 buf = ""
             }
             let start = i
             i += 2
-            while i + 1 < n && !(source.byte_at(i) == 42 && source.byte_at(i + 1) == 47) {
+            while i + 1 < n and not (source.byte_at(i) == 42 and source.byte_at(i + 1) == 47) {
                 i += 1
             }
             i = i + 2
@@ -4940,17 +4947,17 @@ fun _highlight_into(code: Node, source: String, cfg: HlConfig) {
                 i = n
             }
             _hl_span(code, "tok-com", source.substring(start, i))
-        } else if (cfg.slash && b == 47 && i + 1 < n && source.byte_at(i + 1) == 47) || (cfg.hash && b == 35) {
+        } else if (cfg.slash and b == 47 and i + 1 < n and source.byte_at(i + 1) == 47) or (cfg.hash and b == 35) {
             if buf != "" {
                 let _ = code.child_text(buf)
                 buf = ""
             }
             let start = i
-            while i < n && source.byte_at(i) != 10 {
+            while i < n and source.byte_at(i) != 10 {
                 i += 1
             }
             _hl_span(code, "tok-com", source.substring(start, i))
-        } else if b == 34 || b == 39 || (cfg.backtick && b == 96) {
+        } else if b == 34 or b == 39 or (cfg.backtick and b == 96) {
             if buf != "" {
                 let _ = code.child_text(buf)
                 buf = ""
@@ -4958,7 +4965,7 @@ fun _highlight_into(code: Node, source: String, cfg: HlConfig) {
             let quote = b
             let start = i
             i += 1
-            while i < n && source.byte_at(i) != quote {
+            while i < n and source.byte_at(i) != quote {
                 if source.byte_at(i) == 92 {
                     i += 1
                 }
@@ -4969,23 +4976,23 @@ fun _highlight_into(code: Node, source: String, cfg: HlConfig) {
                 i = n
             }
             _hl_span(code, "tok-str", source.substring(start, i))
-        } else if b >= 48 && b <= 57 && !(i > 0 && _hl_word_char(source.byte_at(i - 1))) {
+        } else if b >= 48 and b <= 57 and not (i > 0 and _hl_word_char(source.byte_at(i - 1))) {
             if buf != "" {
                 let _ = code.child_text(buf)
                 buf = ""
             }
             let start = i
-            while i < n && (source.byte_at(i) >= 48 && source.byte_at(i) <= 57 || source.byte_at(i) == 46 || (source.byte_at(
+            while i < n and (source.byte_at(i) >= 48 and source.byte_at(i) <= 57 or source.byte_at(i) == 46 or (source.byte_at(
                 i,
-            ) >= 97 && source.byte_at(i) <= 102) || (source.byte_at(i) >= 65 && source.byte_at(i) <= 70) || source.byte_at(
+            ) >= 97 and source.byte_at(i) <= 102) or (source.byte_at(i) >= 65 and source.byte_at(i) <= 70) or source.byte_at(
                 i,
             ) == 120) {
                 i += 1
             }
             _hl_span(code, "tok-num", source.substring(start, i))
-        } else if _ascii_letter(b) || b == 95 {
+        } else if _ascii_letter(b) or b == 95 {
             let start = i
-            while i < n && _hl_word_char(source.byte_at(i)) {
+            while i < n and _hl_word_char(source.byte_at(i)) {
                 i += 1
             }
             let word = source.substring(start, i)
@@ -5010,7 +5017,7 @@ fun _highlight_into(code: Node, source: String, cfg: HlConfig) {
 
 // Highlight a standalone snippet into a <code> node. Markdown fenced blocks
 // call this automatically when the info string names a known language.
-fun highlight(source: String, lang: String) -> Node {
+fun highlight(source: str, lang: str) -> Node {
     let code = Node.code()
     if _valid_class_token("language-".concat(lang)) {
         let _ = code.class_name("language-".concat(lang))
@@ -5033,24 +5040,24 @@ fun highlight(source: String, lang: String) -> Node {
 // locale is served as its own path prefix ("" for the root language, "en"
 // for /en/), which is exactly what Site.page expects.
 
-struct Locale {
-    code: String,
-    prefix: String,
+class Locale {
+    code: str
+    prefix: str
 }
 
-struct I18n {
-    site_url: String,
-    locales: List<Locale>,
-    default_index: Int,
+class I18n {
+    site_url: str
+    locales: list[Locale]
+    default_index: int
 }
 
-fun i18n(site_url: String) -> I18n {
-    let locales: List<Locale> = []
-    return I18n { site_url, locales, default_index: 0 }
+fun i18n(site_url: str) -> I18n {
+    let locales: list[Locale] = []
+    return I18n(site_url: site_url, locales: locales, default_index: 0)
 }
 
-fun _strip_slashes(value: String) -> String {
-    let v = value.trim()
+fun _strip_slashes(value: str) -> str {
+    var v = value.trim()
     while v.starts_with("/") {
         v = v.substring(1, v.length())
     }
@@ -5062,27 +5069,27 @@ fun _strip_slashes(value: String) -> String {
 
 impl I18n {
     // The root language, served at "/". Call once; the first default wins.
-    fun default_locale(self, code: String) -> I18n {
-        self.locales.push(Locale { code, prefix: "" })
+    fun default_locale(self, code: str) -> I18n {
+        self.locales.push(Locale(code: code, prefix: ""))
         self.default_index = self.locales.len() - 1
         return self
     }
 
     // Another language, served under "/<prefix>/" (e.g. locale("en", "en")).
-    fun locale(self, code: String, prefix: String) -> I18n {
-        self.locales.push(Locale { code, prefix: _strip_slashes(prefix) })
+    fun locale(self, code: str, prefix: str) -> I18n {
+        self.locales.push(Locale(code: code, prefix: _strip_slashes(prefix)))
         return self
     }
 
-    fun all(self) -> List<Locale> {
+    fun all(self) -> list[Locale] {
         return self.locales
     }
 
     // The Site route for a page at `subpath` in `locale`: "/", "/about",
     // "/en", "/en/about". Pass this to Site.page.
-    fun route(self, locale: Locale, subpath: String) -> String {
+    fun route(self, locale: Locale, subpath: str) -> str {
         let sub = _strip_slashes(subpath)
-        let parts: List<String> = []
+        let parts: list[str] = []
         if locale.prefix != "" {
             parts.push(locale.prefix)
         }
@@ -5092,7 +5099,7 @@ impl I18n {
         if parts.len() == 0 {
             return "/"
         }
-        let out = ""
+        var out = ""
         for part in parts {
             out = out.concat("/").concat(part)
         }
@@ -5101,8 +5108,8 @@ impl I18n {
 
     // The clean canonical URL for `subpath` in `locale`, matching what Site
     // emits (a trailing slash on every route).
-    fun url(self, locale: Locale, subpath: String) -> String {
-        let base = self.site_url
+    fun url(self, locale: Locale, subpath: str) -> str {
+        var base = self.site_url
         while base.ends_with("/") {
             base = base.substring(0, base.length() - 1)
         }
@@ -5120,7 +5127,7 @@ impl I18n {
     // Set the page's lang, canonical URL, and hreflang alternates (every
     // locale plus x-default) for `subpath` in `locale`. One call does the
     // SEO wiring a multilingual page needs.
-    fun localize(self, page: Page, locale: Locale, subpath: String) -> Page {
+    fun localize(self, page: Page, locale: Locale, subpath: str) -> Page {
         let out = page.lang(locale.code).canonical(self.url(locale, subpath))
         for other in self.locales {
             let _ = out.alternate(other.code, self.url(other, subpath))
@@ -5132,27 +5139,27 @@ impl I18n {
 // ----- markdown headings, slugs, and a table of contents -----
 
 // One heading found in a markdown source.
-struct Heading {
-    level: Int,
-    text: String,
-    slug: String,
+class Heading {
+    level: int
+    text: str
+    slug: str
 }
 
 // A GitHub-style slug: lowercase, spaces to single hyphens, only letters,
 // digits, and hyphens kept, no leading or trailing hyphen. Runs of separators
 // collapse.
-fun _md_slug(text: String) -> String {
+fun _md_slug(text: str) -> str {
     let plain = _md_strip(text).to_lower()
-    let out = ""
-    let prev_dash = true
-    let i = 0
+    var out = ""
+    var prev_dash = true
+    var i = 0
     while i < plain.length() {
         let b = plain.byte_at(i)
-        if (b >= 97 && b <= 122) || (b >= 48 && b <= 57) {
+        if (b >= 97 and b <= 122) or (b >= 48 and b <= 57) {
             out = out.concat(plain.substring(i, i + 1))
             prev_dash = false
-        } else if b == 32 || b == 45 || b == 95 {
-            if !prev_dash {
+        } else if b == 32 or b == 45 or b == 95 {
+            if not prev_dash {
                 out = out.concat("-")
                 prev_dash = true
             }
@@ -5167,24 +5174,24 @@ fun _md_slug(text: String) -> String {
 
 // Strip inline markdown to plain text: emphasis, strong, code spans, link
 // and image syntax, and backslash escapes. Used for slugs and TOC labels.
-fun _md_strip(text: String) -> String {
-    let out = ""
-    let i = 0
+fun _md_strip(text: str) -> str {
+    var out = ""
+    var i = 0
     let n = text.length()
     while i < n {
         let b = text.byte_at(i)
-        if b == 92 && i + 1 < n {
+        if b == 92 and i + 1 < n {
             out = out.concat(text.substring(i + 1, i + 2))
             i += 2
-        } else if b == 96 || b == 42 || b == 95 {
+        } else if b == 96 or b == 42 or b == 95 {
             i += 1
-        } else if b == 33 && i + 1 < n && text.byte_at(i + 1) == 91 {
+        } else if b == 33 and i + 1 < n and text.byte_at(i + 1) == 91 {
             i += 1
         } else if b == 91 {
             i += 1
         } else if b == 93 {
             // Drop the following (url) of a link, if present.
-            if i + 1 < n && text.byte_at(i + 1) == 40 {
+            if i + 1 < n and text.byte_at(i + 1) == 40 {
                 let close = _md_find_byte(text, 41, i + 2)
                 if close >= 0 {
                     i = close + 1
@@ -5204,21 +5211,21 @@ fun _md_strip(text: String) -> String {
 
 // Every ATX heading in `source`, in document order, with its level, plain
 // text, and slug. Headings inside fenced code blocks are skipped.
-fun headings(source: String) -> List<Heading> {
-    let out: List<Heading> = []
+fun headings(source: str) -> list[Heading] {
+    let out: list[Heading] = []
     let lines = source.split("\n")
-    let in_fence = false
-    let i = 0
+    var in_fence = false
+    var i = 0
     while i < lines.len() {
         let line = lines.get(i)
         if _md_is_fence(line) {
-            in_fence = !in_fence
-        } else if !in_fence {
+            in_fence = not in_fence
+        } else if not in_fence {
             let t = line.trim()
             let level = _md_heading_level(t)
             if level > 0 {
                 let raw = t.substring(level + 1, t.length()).trim()
-                out.push(Heading { level, text: _md_strip(raw), slug: _md_slug(raw) })
+                out.push(Heading(level: level, text: _md_strip(raw), slug: _md_slug(raw)))
             }
         }
         i += 1
@@ -5231,11 +5238,11 @@ fun headings(source: String) -> List<Heading> {
 // hierarchy. Headings from `min_level` to `max_level` inclusive are included
 // (2 to 3 is a common choice: skip the h1 title, list sections). A heading
 // with an empty slug is skipped, since it has no anchor to point at.
-fun table_of_contents(source: String, min_level: Int, max_level: Int) -> Node {
+fun table_of_contents(source: str, min_level: int, max_level: int) -> Node {
     let nav = Node.nav().class_name("toc").attr("aria-label", "Table of contents")
     let list = Node.ul()
     for heading in headings(source) {
-        if heading.level >= min_level && heading.level <= max_level && heading.slug != "" {
+        if heading.level >= min_level and heading.level <= max_level and heading.slug != "" {
             let item = Node.li().attr("data-level", heading.level.to_string()).child(
                 Node.link(heading.text, "#".concat(heading.slug)),
             )
