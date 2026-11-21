@@ -20,7 +20,7 @@ version = "0.1.0"
 edition = "v3"
 
 [dependencies]
-"github.com/martian56/raven-web" = "v0.12.0"
+"github.com/martian56/raven-web" = "v0.20.0"
 ```
 
 and `site.rv`:
