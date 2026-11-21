@@ -6,7 +6,7 @@ through it.
 
 ## What you need
 
-- Raven 2.26.1 or newer on PATH (`raven -V`), which also installs `rvpm`.
+- Raven 3.0.0 or newer on PATH (`raven -V`), which also installs `rvpm`.
 - Nothing else. No Node, no bundler, no JavaScript.
 
 ## A project in one file
@@ -17,7 +17,7 @@ Make a directory with two files. `rv.toml`:
 [package]
 name = "my-site"
 version = "0.1.0"
-edition = "v2"
+edition = "v3"
 
 [dependencies]
 "github.com/martian56/raven-web" = "v0.12.0"
