@@ -1329,3 +1329,11 @@ fun test_markdown_headings_skip_fenced_code() {
     assert_true(hs.get(0).slug == "real")
     assert_true(hs.get(1).slug == "also-real")
 }
+
+fun test_text_of_prerenders_initial_value() {
+    let likes = signal("likes", "7")
+    let html = Node.span().text_of(likes).render()
+    assert_true(html.contains(">7</span>"))
+    let nested = Node.span().text_of(signal("auth", "{}").at("org_id")).render()
+    assert_false(nested.contains("{}"))
+}
