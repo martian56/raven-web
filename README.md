@@ -17,7 +17,7 @@ Add the latest release to `rv.toml`:
 
 ```toml
 [dependencies]
-"github.com/martian56/raven-web" = "v0.20.0"
+"github.com/martian56/raven-web" = "v0.20.1"
 ```
 
 Raven Web needs Raven 3.0.0 or newer and is tested on Linux and Windows.
