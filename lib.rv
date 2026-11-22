@@ -1158,6 +1158,10 @@ impl Node {
     // the signal is a value the compiler checks, not a string it cannot see.
     fun text_of(self, source: Signal) -> Node {
         self.binds.push(_node_bind("text", source.path, ""))
+        // Paint the starting value so the page reads right before app.js runs.
+        if source.key == source.path and not source.raw and self.kids.len() == 0 {
+            return self.child_text(source.initial)
+        }
         return self
     }
 
