@@ -1413,3 +1413,12 @@ fun test_field_selectors_may_hold_row_placeholders() {
     let bad2 = Behavior.new().fetch(request("POST", "/ship").field("carrier", "a{b}"))
     assert_true(bad2.warnings.len() > 0)
 }
+
+fun test_css_var_sets_only_a_validated_custom_property() {
+    let ok = Node.div().css_var("h", "{{bar_pct}}").css_var("w", "40%").render()
+    assert_true(ok.contains("style=\"--h:{{bar_pct}};--w:40%\""))
+    let bad = Node.div().css_var("h", "1;background:url(x)")
+    assert_true(bad.warnings.len() > 0)
+    assert_false(bad.render().contains("style"))
+    assert_true(Node.div().css_var("H", "1").warnings.len() > 0)
+}

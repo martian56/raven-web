@@ -899,6 +899,46 @@ impl Node {
     // no-op. `class` accumulates, which is what a caller adding a class to a
     // component's own markup means; every other attribute is replaced, so the
     // last write wins.
+    // Set one CSS custom property in the element's style, such as a chart
+    // bar's height: `css_var("h", "{{bar_pct}}")` gives `style="--h:57"` per
+    // row, used from CSS as `height: calc(var(--h) * 1%)`. The name must be
+    // lowercase letters, digits, and dashes, and the value only letters,
+    // digits, `.`, `%`, `-`, `_`, and `{{field}}` placeholders, so it cannot
+    // carry any other CSS. Raw `style` stays refused by `attr`.
+    fun css_var(self, name: str, value: str) -> Node {
+        var ok_name = name.length() > 0
+        for c in name.chars() {
+            if not ((c >= "a" and c <= "z") or (c >= "0" and c <= "9") or c == "-") {
+                ok_name = false
+            }
+        }
+        let bare = value.replace("{{", "").replace("}}", "")
+        var ok_value = value.length() > 0 and value.length() <= 80
+        for c in bare.chars() {
+            if not ((c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "." or c == "%" or c == "-" or c == "_") {
+                ok_value = false
+            }
+        }
+        if not ok_name or not ok_value {
+            self.warnings.push(
+                "dropped css_var ".concat(_quote_word(name)).concat(": invalid name or value ").concat(
+                    _quote_word(value),
+                ),
+            )
+            return self
+        }
+        for existing in self.attrs {
+            if existing.name == "style" {
+                existing.value = existing.value.concat(";--").concat(name).concat(":").concat(value)
+                return self
+            }
+        }
+        self.attrs.push(
+            Attribute(name: "style", value: "--".concat(name).concat(":").concat(value)),
+        )
+        return self
+    }
+
     fun attr(self, name: str, value: str) -> Node {
         if not _valid_attr_name(name) {
             self.warnings.push(
