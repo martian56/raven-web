@@ -7,7 +7,17 @@
 //   ./site.exe                # writes dist-myblog/
 
 from std.io import println
-from "../../lib" import FeedEntry, Node, Page, Site, StaticFile, Stylesheet, atom_feed, markdown, syntax_styles
+from "../../lib" import (
+    FeedEntry,
+    Node,
+    Page,
+    Site,
+    StaticFile,
+    Stylesheet,
+    atom_feed,
+    markdown,
+    syntax_styles,
+)
 from "../../dev" import cli
 
 class Post {
