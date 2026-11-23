@@ -1052,8 +1052,11 @@ impl Node {
         return self.on(Event.Change, behavior)
     }
 
+    // A scripted submit always stops the browser's own submit: otherwise the
+    // page reloads (or navigates to the form's action) and the behavior's
+    // requests are cut off.
     fun on_submit(self, behavior: Behavior) -> Node {
-        return self.on(Event.Submit, behavior)
+        return self.on(Event.Submit, behavior.prevent_default())
     }
 
     fun on_key_down(self, behavior: Behavior) -> Node {

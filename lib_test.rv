@@ -1430,3 +1430,8 @@ fun test_spa_assets_are_root_relative_so_deep_links_load_them() {
     let plain = Page.new("t", Node.div()).html()
     assert_true(plain.contains("src=\"app.js\""))
 }
+
+fun test_on_submit_always_prevents_the_native_submit() {
+    let html = Node.form().on_submit(Behavior.new().fetch(request("POST", "/login"))).render()
+    assert_true(html.contains("&quot;p&quot;:1") or html.contains("\"p\":1"))
+}
