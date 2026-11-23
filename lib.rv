@@ -2542,7 +2542,7 @@ fun _render_runtime() -> str {
         "function rw_list(b){var box=rw_find(b[1]);if(!box){return;}var items=rw_get(b[2])||[];var ff=b[4];var fv=b[5];",
     )
     out = out.concat(
-        "if(!box._rwP){var tmp=document.createElement('div');tmp.innerHTML=b[3];box._rwP=tmp.firstElementChild;}",
+        "if(!box._rwP){var tmp=document.createElement('template');tmp.innerHTML=b[3];box._rwP=tmp.content.firstElementChild;}",
     )
     out = out.concat(
         "var proto=box._rwP;if(!proto){return;}var old=box._rwK||{};var next={};var cursor=box.firstChild;",
