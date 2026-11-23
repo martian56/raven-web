@@ -215,6 +215,31 @@ It stays live state: behaviors can clear or replace it, and `fetch` can refill
 it later. `Page.data(key, json)` does the same for a key you address directly,
 and `ctx.local_of` gives a component structured local state.
 
+## Talking to an API
+
+`request(method, url)` builds a typed request a behavior sends with `fetch`:
+
+```rust
+request("POST", "/api/v1/cart/items")
+    .number("variant_id", "{{id}}")        // a list row's id, sent as a JSON number
+    .number_field("qty", "#qty")           // an input's value as a number
+    .cents_field("price_cents", "#price")  // "24.50" in the input is sent as 2450
+    .from_state("note", "draft.note")      // any state value, keeping its JSON type
+    .header("X-Shop", "{{shop.slug}}")
+    .idempotency_key()                     // a fresh Idempotency-Key per click
+    .auth("auth.token")
+    .store_in(cart)                        // the JSON response
+    .store_error("cart_err")               // the JSON error body, to show its message
+```
+
+- A URL may hold `{{state.path}}`, filled and URL-encoded when the request is
+  sent: `request("GET", "/api/v1/products/{{route.id}}")`.
+- Inside a list template, `{{field}}` in a URL, value, or field selector
+  (`#qty-{{id}}`) is filled from that row first.
+- `router.route("/products/:id", view).on_enter(behavior)` runs the behavior
+  whenever the route is shown, including when only its parameters change: the
+  place to load a view's data.
+
 ## Accessibility
 
 The pieces a screen reader needs are bindings like any other.
