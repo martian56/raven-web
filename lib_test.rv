@@ -1422,3 +1422,11 @@ fun test_css_var_sets_only_a_validated_custom_property() {
     assert_false(bad.render().contains("style"))
     assert_true(Node.div().css_var("H", "1").warnings.len() > 0)
 }
+
+fun test_spa_assets_are_root_relative_so_deep_links_load_them() {
+    let html = Page.new("t", Node.div()).spa().html()
+    assert_true(html.contains("src=\"/app.js\""))
+    assert_true(html.contains("href=\"/styles.css\""))
+    let plain = Page.new("t", Node.div()).html()
+    assert_true(plain.contains("src=\"app.js\""))
+}

@@ -3737,7 +3737,10 @@ impl Page {
     // resolves them from any URL).
     fun _ref(self, name: str) -> str {
         if self.base == "" {
-            return name
+            // A single-page app is served at every route path (/products/12),
+            // so its assets must be root-relative or a deep link loads them
+            // from /products/app.js and gets the page instead.
+            return "/".concat(name) if self.single_page else name
         }
         return self.base.concat("/").concat(name)
     }
