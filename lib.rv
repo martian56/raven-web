@@ -2486,7 +2486,7 @@ fun _render_runtime() -> str {
         "function rw_esc(v){var o='';for(var i=0;i<v.length;i++){var c=v.charCodeAt(i);if(c===92||c===34){o+=String.fromCharCode(92);}o+=v.charAt(i);}return o;}",
     )
     out = out.concat(
-        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=item[f];if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
+        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=f==='.'?item:(item!==null&&typeof item==='object'?item[f]:undefined);if(v===undefined&&f.indexOf('.')>0){start=out.indexOf('{{',end);continue;}if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
     )
     out = out.concat(
         "function rw_slots(node){var slots=[];(function walk(n){if(n.attributes){for(var i=0;i<n.attributes.length;i++){var a=n.attributes[i];if(a.value.indexOf('{{')>=0){slots.push([n,a.name,a.value]);}}}for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){if(c.nodeValue.indexOf('{{')>=0){slots.push([c,null,c.nodeValue]);}}else if(c.nodeType===1){walk(c);}}})(node);node._rwS=slots;return node;}",
