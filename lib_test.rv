@@ -1,6 +1,37 @@
 from std.fs import create_dir_all, exists, read, write
 from std.test import assert_false, assert_true
-from "./lib" import Behavior, Ctx, CssRule, Expr, FeedEntry, Layout, Node, Page, Router, Signal, Site, StaticFile, Stylesheet, Theme, app, atom_feed, chunks, headings, highlight, i18n, load_documents, markdown, parse_document, table_of_contents, query_param, request, signal, sort_documents_desc, syntax_styles, transition_styles
+from "./lib" import (
+    Behavior,
+    Ctx,
+    CssRule,
+    Expr,
+    FeedEntry,
+    Layout,
+    Node,
+    Page,
+    Router,
+    Signal,
+    Site,
+    StaticFile,
+    Stylesheet,
+    Theme,
+    app,
+    atom_feed,
+    chunks,
+    headings,
+    highlight,
+    i18n,
+    load_documents,
+    markdown,
+    parse_document,
+    table_of_contents,
+    query_param,
+    request,
+    signal,
+    sort_documents_desc,
+    syntax_styles,
+    transition_styles,
+)
 
 fun test_html_escapes_text_and_keeps_class_names() {
     let root = Node.div().class_name("min-h-screen bg-slate-950 hover:bg-slate-900 md:p-8").child_text(
@@ -1336,4 +1367,71 @@ fun test_text_of_prerenders_initial_value() {
     assert_true(html.contains(">7</span>"))
     let nested = Node.span().text_of(signal("auth", "{}").at("org_id")).render()
     assert_false(nested.contains("{}"))
+}
+
+fun test_fetch_numbers_state_headers_idempotency_and_error_state_serialize() {
+    let html = Node.button("Add").on_click(
+        Behavior.new().fetch(
+            request("POST", "/api/cart/{{route.id}}").number("variant_id", "{{id}}").from_state(
+                "note",
+                "draft.note",
+            ).header("X-Shop", "{{shop.slug}}").idempotency_key().store_error("cart_error").auth(
+                "auth.token",
+            ),
+        ),
+    ).render()
+    assert_true(html.contains("{{route.id}}"))
+    assert_true(html.contains("num"))
+    assert_true(html.contains("draft.note"))
+    assert_true(html.contains("X-Shop"))
+    assert_true(html.contains("cart_error"))
+    let js = Page.new("t", Node.div()).js()
+    assert_true(js.contains("function rw_tmpl"))
+    assert_true(js.contains("Idempotency-Key"))
+    assert_true(js.contains("encodeURIComponent"))
+}
+
+fun test_router_on_enter_runs_effects_for_the_last_route() {
+    let router = Router.new().route("/", Node.div()).route("/products/:id", Node.div()).on_enter(
+        Behavior.new().fetch(request("GET", "/api/products/{{route.id}}").store("product")),
+    )
+    let html = router.to_node().render()
+    assert_true(html.contains("data-rw-enter="))
+    assert_true(html.contains("/api/products/{{route.id}}"))
+    let js = Page.new("t", router.to_node()).spa().js()
+    assert_true(js.contains("data-rw-enter"))
+    assert_false(Router.new().on_enter(Behavior.new()).to_node().render().contains("data-rw-enter"))
+}
+
+fun test_field_selectors_may_hold_row_placeholders() {
+    let ok = Node.button("Ship").on_click(
+        Behavior.new().fetch(request("POST", "/ship").field("carrier", "#c-{{id}}")),
+    ).render()
+    assert_true(ok.contains("#c-{{id}}"))
+    let bad = Behavior.new().fetch(request("POST", "/ship").field("carrier", "#c-{{id;x}}"))
+    assert_true(bad.warnings.len() > 0)
+    let bad2 = Behavior.new().fetch(request("POST", "/ship").field("carrier", "a{b}"))
+    assert_true(bad2.warnings.len() > 0)
+}
+
+fun test_css_var_sets_only_a_validated_custom_property() {
+    let ok = Node.div().css_var("h", "{{bar_pct}}").css_var("w", "40%").render()
+    assert_true(ok.contains("style=\"--h:{{bar_pct}};--w:40%\""))
+    let bad = Node.div().css_var("h", "1;background:url(x)")
+    assert_true(bad.warnings.len() > 0)
+    assert_false(bad.render().contains("style"))
+    assert_true(Node.div().css_var("H", "1").warnings.len() > 0)
+}
+
+fun test_spa_assets_are_root_relative_so_deep_links_load_them() {
+    let html = Page.new("t", Node.div()).spa().html()
+    assert_true(html.contains("src=\"/app.js\""))
+    assert_true(html.contains("href=\"/styles.css\""))
+    let plain = Page.new("t", Node.div()).html()
+    assert_true(plain.contains("src=\"app.js\""))
+}
+
+fun test_on_submit_always_prevents_the_native_submit() {
+    let html = Node.form().on_submit(Behavior.new().fetch(request("POST", "/login"))).render()
+    assert_true(html.contains("&quot;p&quot;:1") or html.contains("\"p\":1"))
 }

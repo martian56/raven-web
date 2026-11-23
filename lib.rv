@@ -899,6 +899,46 @@ impl Node {
     // no-op. `class` accumulates, which is what a caller adding a class to a
     // component's own markup means; every other attribute is replaced, so the
     // last write wins.
+    // Set one CSS custom property in the element's style, such as a chart
+    // bar's height: `css_var("h", "{{bar_pct}}")` gives `style="--h:57"` per
+    // row, used from CSS as `height: calc(var(--h) * 1%)`. The name must be
+    // lowercase letters, digits, and dashes, and the value only letters,
+    // digits, `.`, `%`, `-`, `_`, and `{{field}}` placeholders, so it cannot
+    // carry any other CSS. Raw `style` stays refused by `attr`.
+    fun css_var(self, name: str, value: str) -> Node {
+        var ok_name = name.length() > 0
+        for c in name.chars() {
+            if not ((c >= "a" and c <= "z") or (c >= "0" and c <= "9") or c == "-") {
+                ok_name = false
+            }
+        }
+        let bare = value.replace("{{", "").replace("}}", "")
+        var ok_value = value.length() > 0 and value.length() <= 80
+        for c in bare.chars() {
+            if not ((c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "." or c == "%" or c == "-" or c == "_") {
+                ok_value = false
+            }
+        }
+        if not ok_name or not ok_value {
+            self.warnings.push(
+                "dropped css_var ".concat(_quote_word(name)).concat(": invalid name or value ").concat(
+                    _quote_word(value),
+                ),
+            )
+            return self
+        }
+        for existing in self.attrs {
+            if existing.name == "style" {
+                existing.value = existing.value.concat(";--").concat(name).concat(":").concat(value)
+                return self
+            }
+        }
+        self.attrs.push(
+            Attribute(name: "style", value: "--".concat(name).concat(":").concat(value)),
+        )
+        return self
+    }
+
     fun attr(self, name: str, value: str) -> Node {
         if not _valid_attr_name(name) {
             self.warnings.push(
@@ -1012,8 +1052,11 @@ impl Node {
         return self.on(Event.Change, behavior)
     }
 
+    // A scripted submit always stops the browser's own submit: otherwise the
+    // page reloads (or navigates to the form's action) and the behavior's
+    // requests are cut off.
     fun on_submit(self, behavior: Behavior) -> Node {
-        return self.on(Event.Submit, behavior)
+        return self.on(Event.Submit, behavior.prevent_default())
     }
 
     fun on_key_down(self, behavior: Behavior) -> Node {
@@ -1497,6 +1540,34 @@ fun _has_class(list: str, token: str) -> bool {
     return false
 }
 
+// A selector that may hold list placeholders such as `#ship-{{id}}`, filled
+// per row: the placeholders are checked as names, the rest as CSS text.
+fun _selector_safe(value: str) -> bool {
+    var rest = ""
+    var i = 0
+    while i < value.length() {
+        let open = value.substring(i, value.length()).index_of("{{")
+        if open < 0 {
+            rest = rest + value.substring(i, value.length())
+            break
+        }
+        rest = rest + value.substring(i, i + open)
+        let start = i + open + 2
+        let close = value.substring(start, value.length()).index_of("}}")
+        if close < 1 {
+            return false
+        }
+        for c in value.substring(start, start + close).chars() {
+            if not ((c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_" or c == ".") {
+                return false
+            }
+        }
+        rest = rest + "x"
+        i = start + close + 2
+    }
+    return _css_safe_text(rest)
+}
+
 fun _css_safe_text(value: str) -> bool {
     let lower = value.to_lower()
     if value.contains("{") or value.contains("}") or value.contains("<") or value.contains(">") or value.contains(
@@ -1744,6 +1815,9 @@ class BodyField {
     name: str
     selector: str
     literal: str
+    // "" (a selector's value or a string literal), "num" (the literal as a
+    // number), or "state" (the value at state path `literal`, any JSON type).
+    kind: str
 }
 
 // A typed HTTP request. The author never writes fetch code: raven-web emits it.
@@ -1753,6 +1827,9 @@ class FetchSpec {
     method: str
     url: str
     body_fields: list[BodyField]
+    headers: list[BodyField]
+    idempotent: bool
+    error_state: str
     auth_state: str
     into_state: str
     then: list[Effect]
@@ -1831,10 +1908,14 @@ fun request(method: str, url: str) -> FetchSpec {
     let then: list[Effect] = []
     let on_error: list[Effect] = []
     let warnings: list[str] = []
+    let headers: list[BodyField] = []
     return FetchSpec(
         method: method.to_upper(),
         url: url,
         body_fields: body_fields,
+        headers: headers,
+        idempotent: false,
+        error_state: "",
         auth_state: "",
         into_state: "",
         then: then,
@@ -1846,8 +1927,8 @@ fun request(method: str, url: str) -> FetchSpec {
 impl FetchSpec {
     // Read `selector`'s value at send time and send it as JSON field `name`.
     fun field(self, name: str, selector: str) -> FetchSpec {
-        if _css_safe_text(selector) {
-            self.body_fields.push(BodyField(name: name, selector: selector, literal: ""))
+        if _selector_safe(selector) {
+            self.body_fields.push(BodyField(name: name, selector: selector, literal: "", kind: ""))
         } else {
             _warn_effect(self.warnings, "fetch field", "invalid selector", selector)
         }
@@ -1856,7 +1937,73 @@ impl FetchSpec {
 
     // Send a constant JSON field, for a request whose value is not user input.
     fun value(self, name: str, literal: str) -> FetchSpec {
-        self.body_fields.push(BodyField(name: name, selector: "", literal: literal))
+        self.body_fields.push(BodyField(name: name, selector: "", literal: literal, kind: ""))
+        return self
+    }
+
+    // Read `selector`'s value at send time and send it as a JSON number.
+    fun number_field(self, name: str, selector: str) -> FetchSpec {
+        if _selector_safe(selector) {
+            self.body_fields.push(BodyField(name: name, selector: selector, literal: "", kind: "num"))
+        } else {
+            _warn_effect(self.warnings, "fetch number_field", "invalid selector", selector)
+        }
+        return self
+    }
+
+    // Read a decimal amount such as `24.50` from `selector` and send it as
+    // whole cents (2450).
+    fun cents_field(self, name: str, selector: str) -> FetchSpec {
+        if _selector_safe(selector) {
+            self.body_fields.push(BodyField(name: name, selector: selector, literal: "", kind: "cents"))
+        } else {
+            _warn_effect(self.warnings, "fetch cents_field", "invalid selector", selector)
+        }
+        return self
+    }
+
+    // Send a JSON number. The literal may be a list template such as `{{id}}`,
+    // filled per row, so a row's button can send its own numeric id.
+    fun number(self, name: str, literal: str) -> FetchSpec {
+        self.body_fields.push(BodyField(name: name, selector: "", literal: literal, kind: "num"))
+        return self
+    }
+
+    // Send the value at a state path, keeping its JSON type.
+    fun from_state(self, name: str, path: str) -> FetchSpec {
+        if _css_safe_text(path) {
+            self.body_fields.push(BodyField(name: name, selector: "", literal: path, kind: "state"))
+        } else {
+            _warn_effect(self.warnings, "fetch from_state", "invalid state path", path)
+        }
+        return self
+    }
+
+    // Send a request header. The value may contain `{{state.path}}`.
+    fun header(self, name: str, value: str) -> FetchSpec {
+        if _css_safe_text(name) {
+            self.headers.push(BodyField(name: name, selector: "", literal: value, kind: ""))
+        } else {
+            _warn_effect(self.warnings, "fetch header", "invalid header name", name)
+        }
+        return self
+    }
+
+    // Send a fresh random Idempotency-Key with each click, so a server can tell
+    // a retried request from a new one.
+    fun idempotency_key(self) -> FetchSpec {
+        self.idempotent = true
+        return self
+    }
+
+    // On an error response, store its decoded JSON body in state[key], so the
+    // page can show the server's message.
+    fun store_error(self, state_key: str) -> FetchSpec {
+        if _css_safe_text(state_key) {
+            self.error_state = state_key
+        } else {
+            _warn_effect(self.warnings, "fetch store_error", "invalid state key", state_key)
+        }
         return self
     }
 
@@ -2242,10 +2389,30 @@ fun _serialize_fetch(spec: FetchSpec) -> str {
         }
         out = out.concat("[").concat(_js_string(field.name)).concat(",").concat(
             _js_string(field.selector),
-        ).concat(",").concat(_js_string(field.literal)).concat("]")
+        ).concat(",").concat(_js_string(field.literal)).concat(",").concat(_js_string(field.kind)).concat(
+            "]",
+        )
         first = false
     }
     out = out.concat("]")
+    out = out.concat(",").concat(_js_string("h")).concat(":[")
+    var hfirst = true
+    for h in spec.headers {
+        if not hfirst {
+            out = out.concat(",")
+        }
+        out = out.concat("[").concat(_js_string(h.name)).concat(",").concat(_js_string(h.literal)).concat(
+            "]",
+        )
+        hfirst = false
+    }
+    out = out.concat("]")
+    if spec.idempotent {
+        out = out.concat(",").concat(_js_string("i")).concat(":1")
+    }
+    if spec.error_state != "" {
+        out = out.concat(",").concat(_js_string("x")).concat(":").concat(_js_string(spec.error_state))
+    }
     out = out.concat(",").concat(_js_string("a")).concat(":").concat(_js_string(spec.auth_state))
     out = out.concat(",").concat(_js_string("s")).concat(":").concat(_js_string(spec.into_state))
     out = out.concat(",").concat(_js_string("t")).concat(":").concat(_serialize_effects(spec.then))
@@ -2325,7 +2492,7 @@ fun _render_runtime() -> str {
         // is not cached, because it may match rows a list rebuilds.
         // Two caches, not one: rw_find stores an element and rw_all stores a
         // node list, so sharing a key would hand back the wrong shape.
-        "var rw_c1={},rw_cn={},rw_booted=false,rw_seen=null;function rw_mark(s){return s.indexOf('[data-rw-b=')===0;}",
+        "var rw_c1={},rw_cn={},rw_booted=false,rw_seen=null,rw_sig='';function rw_mark(s){return s.indexOf('[data-rw-b=')===0;}",
     )
     out = out.concat(
         "function rw_find(s){if(rw_c1[s]!==undefined){return rw_c1[s];}try{var el=document.querySelector(s);if(rw_mark(s)){rw_c1[s]=el;}return el;}catch(e){console.error('raven-web: bad selector',s);return null;}}",
@@ -2362,7 +2529,7 @@ fun _render_runtime() -> str {
         "function rw_esc(v){var o='';for(var i=0;i<v.length;i++){var c=v.charCodeAt(i);if(c===92||c===34){o+=String.fromCharCode(92);}o+=v.charAt(i);}return o;}",
     )
     out = out.concat(
-        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=item[f];if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
+        "function rw_subst(s,item,json){var out=s;var start=out.indexOf('{{');while(start>=0){var end=out.indexOf('}}',start);if(end<0){break;}var f=out.substring(start+2,end);var v=f==='.'?item:(item!==null&&typeof item==='object'?item[f]:undefined);if(v===undefined&&f.indexOf('.')>0){start=out.indexOf('{{',end);continue;}if(v===undefined||v===null){v='';}v=String(v);if(json){v=rw_esc(v);}out=out.substring(0,start)+v+out.substring(end+2);start=out.indexOf('{{',start+v.length);}return out;}",
     )
     out = out.concat(
         "function rw_slots(node){var slots=[];(function walk(n){if(n.attributes){for(var i=0;i<n.attributes.length;i++){var a=n.attributes[i];if(a.value.indexOf('{{')>=0){slots.push([n,a.name,a.value]);}}}for(var c=n.firstChild;c;c=c.nextSibling){if(c.nodeType===3){if(c.nodeValue.indexOf('{{')>=0){slots.push([c,null,c.nodeValue]);}}else if(c.nodeType===1){walk(c);}}})(node);node._rwS=slots;return node;}",
@@ -2375,7 +2542,7 @@ fun _render_runtime() -> str {
         "function rw_list(b){var box=rw_find(b[1]);if(!box){return;}var items=rw_get(b[2])||[];var ff=b[4];var fv=b[5];",
     )
     out = out.concat(
-        "if(!box._rwP){var tmp=document.createElement('div');tmp.innerHTML=b[3];box._rwP=tmp.firstElementChild;}",
+        "if(!box._rwP){var tmp=document.createElement('template');tmp.innerHTML=b[3];box._rwP=tmp.content.firstElementChild;}",
     )
     out = out.concat(
         "var proto=box._rwP;if(!proto){return;}var old=box._rwK||{};var next={};var cursor=box.firstChild;",
@@ -2415,7 +2582,7 @@ fun _render_runtime() -> str {
     )
     out = out.concat("function rw_setstate(k,v){rw_state[k]=v;rw_persist(k);rw_notify(k);}")
     out = out.concat(
-        "function rw_fetch(spec){var body=null;var headers={};if(spec.b&&spec.b.length){var o={};for(var i=0;i<spec.b.length;i++){var f=spec.b[i];if(f[1]===''){o[f[0]]=f[2];}else{var el=rw_find(f[1]);o[f[0]]=el?rw_val(el):'';}}body=JSON.stringify(o);headers['Content-Type']='application/json';}if(spec.a){var t=rw_get(spec.a);if(t){headers['Authorization']='Bearer '+t;}}fetch(spec.u,{method:spec.m,headers:headers,body:body}).then(function(r){if(!r.ok){throw new Error('http '+r.status);}var ct=r.headers.get('content-type')||'';return ct.indexOf('json')>=0?r.json():null;}).then(function(data){if(spec.s){rw_setstate(spec.s,data);}rw_run(spec.t||[]);}).catch(function(){rw_run(spec.e||[]);});}",
+        "function rw_tmpl(s,enc){return String(s).replace(/\\{\\{([^}]+)\\}\\}/g,function(m,k){var v=rw_get(k.trim());v=v===undefined||v===null?'':String(v);return enc?encodeURIComponent(v):v;});}function rw_uuid(){if(window.crypto&&crypto.randomUUID){return crypto.randomUUID();}return 'k'+Date.now().toString(36)+Math.random().toString(36).slice(2);}function rw_fetch(spec){var body=null;var headers={};if(spec.b&&spec.b.length){var o={};for(var i=0;i<spec.b.length;i++){var f=spec.b[i];if(f[3]==='num'||f[3]==='cents'){var raw=f[1]===''?f[2]:(rw_find(f[1])?rw_val(rw_find(f[1])):'');var num=Number(String(raw).trim());o[f[0]]=f[3]==='cents'?Math.round(num*100):num;}else if(f[3]==='state'){var sv=rw_get(f[2]);o[f[0]]=sv===undefined?null:sv;}else if(f[1]===''){o[f[0]]=f[2];}else{var el=rw_find(f[1]);o[f[0]]=el?rw_val(el):'';}}body=JSON.stringify(o);headers['Content-Type']='application/json';}if(spec.a){var t=rw_get(spec.a);if(t){headers['Authorization']='Bearer '+t;}}var hs=spec.h||[];for(var h=0;h<hs.length;h++){headers[hs[h][0]]=rw_tmpl(hs[h][1],false);}if(spec.i){headers['Idempotency-Key']=rw_uuid();}if(spec.x){rw_setstate(spec.x,null);}fetch(rw_tmpl(spec.u,true),{method:spec.m,headers:headers,body:body}).then(function(r){var ct=r.headers.get('content-type')||'';var p=ct.indexOf('json')>=0?r.json():Promise.resolve(null);return p.then(function(d){if(!r.ok){if(spec.x){rw_setstate(spec.x,d||{error:{message:'request failed ('+r.status+')'}});}throw new Error('http '+r.status);}return d;});}).then(function(data){if(spec.s){rw_setstate(spec.s,data);}rw_run(spec.t||[]);}).catch(function(){rw_run(spec.e||[]);});}",
     )
     out = out.concat(
         "var rw_domops={st:1,sv:1,sa:1,ac:1,rc:1,tc:1,fo:1,sh:1,hd:1,tv:1,scr:1,cv:1,cc:1};",
@@ -2509,6 +2676,14 @@ fun _render_runtime() -> str {
     out = out.concat("if(spec&&!rw_truthy(rw_get(spec.k))){rw_go(spec.to);return;}}}")
     out = out.concat("for(var j=0;j<els.length;j++){els[j].hidden=els[j]!==hit;}")
     out = out.concat("rw_setstate('route',params||{});")
+    // Enter behaviors run when the shown route or its parameters change.
+    out = out.concat(
+        "var sig=(hit?hit.getAttribute('data-rw-route'):'')+JSON.stringify(params||{});",
+    )
+    out = out.concat("if(hit&&sig!==rw_sig){rw_sig=sig;var en=hit.getAttribute('data-rw-enter');")
+    out = out.concat(
+        "if(en){try{rw_run(JSON.parse(en));}catch(e){console.error('raven-web: bad enter',e);}}}",
+    )
     // Moving focus is how a screen reader learns the view changed. Not on the
     // first paint: the page is being read out already, and stealing focus then
     // would interrupt it.
@@ -3565,7 +3740,10 @@ impl Page {
     // resolves them from any URL).
     fun _ref(self, name: str) -> str {
         if self.base == "" {
-            return name
+            // A single-page app is served at every route path (/products/12),
+            // so its assets must be root-relative or a deep link loads them
+            // from /products/app.js and gets the page instead.
+            return "/".concat(name) if self.single_page else name
         }
         return self.base.concat("/").concat(name)
     }
@@ -3848,6 +4026,7 @@ class RouteView {
     view: Node
     guard_key: str
     guard_to: str
+    enter: list[Effect]
 }
 
 // A client-side router. Every route's view is rendered once at build time; the
@@ -3882,7 +4061,13 @@ impl Router {
     fun route(self, pattern: str, view: Node) -> Router {
         if _valid_route_pattern(pattern) {
             self.routes.push(
-                RouteView(pattern: _normalize_path(pattern), view: view, guard_key: "", guard_to: ""),
+                RouteView(
+                    pattern: _normalize_path(pattern),
+                    view: view,
+                    guard_key: "",
+                    guard_to: "",
+                    enter: [],
+                ),
             )
         } else {
             self.warnings.push(
@@ -3917,6 +4102,24 @@ impl Router {
         let last = self.routes.get(self.routes.len() - 1)
         last.guard_key = source.path
         last.guard_to = _normalize_path(redirect_to)
+        return self
+    }
+
+    // Run `behavior` each time the route added most recently is entered,
+    // including when only its parameters change (/products/1 to /products/2):
+    // the place to fetch the view's data.
+    fun on_enter(self, behavior: Behavior) -> Router {
+        if self.routes.len() == 0 {
+            self.warnings.push("dropped on_enter: it was called before any route")
+            return self
+        }
+        let last = self.routes.get(self.routes.len() - 1)
+        for warning in behavior.warnings {
+            self.warnings.push(warning)
+        }
+        for effect in behavior.effects {
+            last.enter.push(effect)
+        }
         return self
     }
 
@@ -3957,6 +4160,9 @@ impl Router {
             ).child(item.view)
             if item.guard_key != "" {
                 let _ = holder.attr("data-rw-guard", _guard_json(item.guard_key, item.guard_to))
+            }
+            if item.enter.len() > 0 {
+                let _ = holder.attr("data-rw-enter", _serialize_effects(item.enter))
             }
             let _ = out.child(holder)
         }

@@ -6,7 +6,18 @@
 //   ./target/blog.exe            # writes dist-blog/
 
 from std.io import println
-from "../lib" import Document, FeedEntry, Layout, Node, Page, Site, StaticFile, atom_feed, load_documents, sort_documents_desc
+from "../lib" import (
+    Document,
+    FeedEntry,
+    Layout,
+    Node,
+    Page,
+    Site,
+    StaticFile,
+    atom_feed,
+    load_documents,
+    sort_documents_desc,
+)
 
 fun shell() -> Layout {
     return Layout.new().header(Node.header().child(Node.link("The Raven Blog", "/"))).footer(
